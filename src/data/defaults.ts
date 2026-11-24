@@ -4,6 +4,7 @@ import {
   LauncherSettings,
   ManualCityOption,
   SlideshowPoolKey,
+  TvInputDevice,
   WallpaperItem,
   WeatherTag,
 } from '../types/launcher';
@@ -541,7 +542,7 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
   wallpaperWeatherTags: {},
   hiddenWallpaperIds: [],
   publicReleaseRepo: import.meta.env.VITE_PUBLIC_RELEASE_REPO || '',
-  activeInput: 'Google TV Home',
+  activeInput: 'HDMI 1',
   wifiEnabled: true,
   wifiNetwork: 'LivingRoom_5GHz',
   bluetoothEnabled: true,
@@ -553,12 +554,11 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
   showTouchRemote: false,
 };
 
-export const TV_INPUTS = [
-  { id: 'tv-home', name: 'Google TV Home', detail: 'Active Launcher' },
-  { id: 'hdmi-1', name: 'HDMI 1', detail: 'Game Console · 4K 120Hz' },
-  { id: 'hdmi-2', name: 'HDMI 2 (eARC)', detail: 'AV Receiver · Dolby Atmos' },
-  { id: 'hdmi-3', name: 'HDMI 3', detail: 'Media PC · 2160p' },
-  { id: 'cast', name: 'Google Cast', detail: 'Ready for devices on Wi-Fi' },
+export const DEFAULT_TV_INPUTS: TvInputDevice[] = [
+  { id: 'hdmi-1', name: 'HDMI 1', detail: 'Connected', type: 'hdmi', state: 'connected', isPassthrough: true },
+  { id: 'hdmi-2', name: 'HDMI 2 (eARC)', detail: 'Connected', type: 'hdmi', state: 'connected', isPassthrough: true },
+  { id: 'hdmi-3', name: 'HDMI 3', detail: 'No signal', type: 'hdmi', state: 'disconnected', isPassthrough: true },
+  { id: 'live-tv', name: 'Live TV', detail: 'Channels', type: 'tuner', state: 'standby', isPassthrough: false },
 ];
 
 export const WIFI_NETWORKS = [

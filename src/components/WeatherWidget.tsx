@@ -70,12 +70,17 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({
             <span>{weather.current.conditionLabel}</span>
           </div>
 
-          {weather.hasWarning && weather.warningHeadline && (
-            <div className="mt-0.5 flex items-center justify-end gap-1 text-xs font-medium text-amber-300">
-              <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
-              <span>Warning · {weather.warningHeadline}</span>
-            </div>
-          )}
+          {weather.warningHeadline &&
+            (weather.hasWarning ? (
+              <div className="mt-0.5 flex items-center justify-end gap-1 text-xs font-medium text-amber-300">
+                <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
+                <span>Warning · {weather.warningHeadline}</span>
+              </div>
+            ) : (
+              <div className="mt-0.5 text-right text-xs text-white/70">
+                {weather.warningHeadline}
+              </div>
+            ))}
         </>
       ) : null}
     </button>

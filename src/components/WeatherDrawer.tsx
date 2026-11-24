@@ -1,16 +1,43 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Cloud,
+  Droplets,
   LocateFixed,
   Search,
+  Sun,
+  Sunrise,
+  Sunset,
+  Thermometer,
   Wind,
   X,
 } from 'lucide-react';
 import { searchCitiesByName } from '../services/weatherService';
 import { ManualCityOption, WeatherState } from '../types/launcher';
 import { renderWeatherIcon } from './WeatherWidget';
+
+function formatCompassDirection(deg?: number): string {
+  if (typeof deg !== 'number' || Number.isNaN(deg)) return '';
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+  return dirs[idx];
+}
+
+function formatClockFromIso(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+}
+
+function formatShortDateFromIso(iso?: string, isDateOnly = false): string {
+  if (!iso) return '';
+  const d = new Date(isDateOnly ? `${iso}T12:00:00` : iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+}
 
 export interface WeatherDrawerFocus {
   section: 'header' | 'hourly' | 'daily' | 'controls';
@@ -50,8 +77,13 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<ManualCityOption[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [expandedForecast, setExpandedForecast] = useState<{
+    kind: 'hourly' | 'daily';
+    index: number;
+  } | null>(null);
 
   const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const expandedDetailRef = useRef<HTMLDivElement | null>(null);
   const headerRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const hourlyStripRef = useRef<HTMLDivElement | null>(null);
   const hourlyCardRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -60,6 +92,45 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
   const resultRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchSubmitRef = useRef<HTMLButtonElement | null>(null);
+
+  const toggleExpandedForecast = useCallback((kind: 'hourly' | 'daily', index: number) => {
+    setExpandedForecast((prev) =>
+      prev && prev.kind === kind && prev.index === index ? null : { kind, index }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setExpandedForecast(null);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    setExpandedForecast(null);
+  }, [weather.activeLocationLabel]);
+
+  useEffect(() => {
+    if (!expandedForecast) return;
+    const raf = requestAnimationFrame(() => {
+      expandedDetailRef.current?.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [expandedForecast]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onWeatherSubBack = (e: Event) => {
+      if (expandedForecast) {
+        e.preventDefault();
+        setExpandedForecast(null);
+      }
+    };
+    window.addEventListener('tv-weather-subback', onWeatherSubBack);
+    return () => window.removeEventListener('tv-weather-subback', onWeatherSubBack);
+  }, [isOpen, expandedForecast]);
 
   const lastHandledActivateSignalRef = useRef<number>(activateSignal);
   const focusRef = useRef<WeatherDrawerFocus>(focus);
@@ -70,6 +141,7 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     onUseGps,
     onToggleSyncBackground,
     onToggleEnabled,
+    toggleExpandedForecast,
   });
   callbacksRef.current = {
     onRefresh,
@@ -77,6 +149,7 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     onUseGps,
     onToggleSyncBackground,
     onToggleEnabled,
+    toggleExpandedForecast,
   };
 
   useEffect(() => {
@@ -131,6 +204,10 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     if (currentFocus.section === 'header') {
       if (currentFocus.index === 0) cbs.onRefresh();
       else if (currentFocus.index === 1) cbs.onClose();
+    } else if (currentFocus.section === 'hourly') {
+      cbs.toggleExpandedForecast('hourly', currentFocus.index);
+    } else if (currentFocus.section === 'daily') {
+      cbs.toggleExpandedForecast('daily', currentFocus.index);
     } else if (currentFocus.section === 'controls') {
       if (currentFocus.index === 0) cbs.onUseGps();
       else if (currentFocus.index === 1) searchInputRef.current?.focus();
@@ -174,7 +251,15 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const activeWarning = weather.warningHeadline ?? weather.extendedWarningHeadline;
+  const activeNote = weather.warningHeadline ?? weather.extendedWarningHeadline;
+  const expandedHourSlot =
+    expandedForecast?.kind === 'hourly'
+      ? weather.hourly24Hours[expandedForecast.index] ?? null
+      : null;
+  const expandedDaySlot =
+    expandedForecast?.kind === 'daily'
+      ? weather.daily7Days[expandedForecast.index] ?? null
+      : null;
 
   return (
     <div
@@ -251,19 +336,22 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
           ref={scrollBodyRef}
           className="no-scrollbar mt-3 flex-1 space-y-3.5 overflow-y-auto pr-0.5"
         >
-          {/* Active Weather Warning Callout */}
-          {activeWarning && (
-            <div
-              role="alert"
-              className="flex items-center gap-2.5 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3.5 py-2.5 text-xs font-medium text-amber-200 sm:text-sm"
-            >
-              <AlertTriangle size={17} className="shrink-0 text-amber-300" aria-hidden="true" />
-              <div className="min-w-0 leading-snug">
-                <span className="font-semibold text-amber-100">Warning · </span>
-                <span>{activeWarning}</span>
+          {/* Weather Warning (highlighted ONLY when an official/severe area warning is active) or plain-text note */}
+          {activeNote &&
+            (weather.hasWarning ? (
+              <div
+                role="alert"
+                className="flex items-center gap-2.5 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3.5 py-2.5 text-xs font-medium text-amber-200 sm:text-sm"
+              >
+                <AlertTriangle size={17} className="shrink-0 text-amber-300" aria-hidden="true" />
+                <div className="min-w-0 leading-snug">
+                  <span className="font-semibold text-amber-100">Warning · </span>
+                  <span>{activeNote}</span>
+                </div>
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="px-0.5 text-xs text-white/75 sm:text-sm">{activeNote}</p>
+            ))}
 
           {/* Current Summary Card */}
           {weather.current ? (
@@ -309,7 +397,7 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                 <span aria-hidden="true" className="text-xs text-white/35">
                   ·
                 </span>
-                <span className="text-xs text-white/55">Scroll right</span>
+                <span className="text-xs text-white/55">Select to expand</span>
               </div>
               <div className="flex items-center gap-1">
                 <button
@@ -337,6 +425,8 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
             >
               {weather.hourly24Hours.map((slot, idx) => {
                 const isFocused = focus.section === 'hourly' && focus.index === idx;
+                const isExpanded =
+                  expandedForecast?.kind === 'hourly' && expandedForecast.index === idx;
                 return (
                   <button
                     key={slot.timeIso}
@@ -344,15 +434,19 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       hourlyCardRefs.current[idx] = el;
                     }}
                     type="button"
+                    aria-expanded={isExpanded}
                     onMouseEnter={() => onFocusChange({ section: 'hourly', index: idx })}
                     onFocus={() => onFocusChange({ section: 'hourly', index: idx })}
-                    onClick={() => onFocusChange({ section: 'hourly', index: idx })}
+                    onClick={() => {
+                      onFocusChange({ section: 'hourly', index: idx });
+                      toggleExpandedForecast('hourly', idx);
+                    }}
                     className={`flex min-h-[96px] flex-[0_0_calc((100%-1.5rem)/5)] snap-start flex-col items-center justify-between rounded-xl border p-1.5 text-center transition-all min-[390px]:flex-[0_0_calc((100%-2.25rem)/7)] ${
                       isFocused
                         ? 'border-white bg-white/16 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]'
-                        : slot.isBadWeather
-                        ? 'border-amber-300/35 bg-amber-500/12 hover:bg-amber-500/18'
-                        : 'border-white/10 bg-black/35 hover:bg-white/8'
+                        : isExpanded
+                        ? 'border-white/45 bg-white/[0.11]'
+                        : 'border-white/10 bg-white/[0.04] hover:bg-white/[0.08]'
                     }`}
                   >
                     <span className="text-[11px] font-medium whitespace-nowrap text-white/75 sm:text-xs">
@@ -362,23 +456,141 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       {renderWeatherIcon(
                         slot.weatherCode,
                         18,
-                        slot.isBadWeather ? 'text-amber-300' : 'text-white/90'
+                        slot.isSevereWarning && weather.hasWarning
+                          ? 'text-amber-300'
+                          : 'text-white/90'
                       )}
                     </div>
                     <span className="font-display text-sm font-medium text-white tabular-nums sm:text-base">
                       {slot.tempC}°
                     </span>
-                    <span
-                      className={`text-[11px] tabular-nums sm:text-xs ${
-                        slot.precipProb >= 30 ? 'text-amber-200' : 'text-white/60'
-                      }`}
-                    >
+                    <span className="text-[11px] text-white/65 tabular-nums sm:text-xs">
                       {slot.precipProb}%
                     </span>
                   </button>
                 );
               })}
             </div>
+
+            {expandedHourSlot && (
+              <div
+                ref={expandedDetailRef}
+                className="mt-2 rounded-xl border border-white/15 bg-white/[0.06] p-3.5"
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-2.5">
+                  <div className="flex items-center gap-3">
+                    {renderWeatherIcon(
+                      expandedHourSlot.weatherCode,
+                      26,
+                      expandedHourSlot.isSevereWarning && weather.hasWarning
+                        ? 'text-amber-300'
+                        : 'text-white'
+                    )}
+                    <div>
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="font-display text-sm font-semibold text-white sm:text-base">
+                          {expandedHourSlot.timeLabel}
+                        </span>
+                        <span className="text-xs text-white/60">
+                          {formatShortDateFromIso(expandedHourSlot.timeIso)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-white/80 sm:text-sm">
+                        {expandedHourSlot.conditionLabel} · {expandedHourSlot.tempC}°C
+                        {typeof expandedHourSlot.apparentTempC === 'number'
+                          ? ` (Feels ${expandedHourSlot.apparentTempC}°)`
+                          : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedForecast(null)}
+                    aria-label="Collapse hourly forecast details"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+
+                <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Droplets size={12} aria-hidden="true" />
+                      <span>Precipitation</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {expandedHourSlot.precipProb}%
+                      {typeof expandedHourSlot.precipMm === 'number'
+                        ? ` · ${expandedHourSlot.precipMm} mm`
+                        : ''}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Wind size={12} aria-hidden="true" />
+                      <span>Wind</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedHourSlot.windSpeedKmh === 'number'
+                        ? `${expandedHourSlot.windSpeedKmh} km/h `
+                        : ''}
+                      {formatCompassDirection(expandedHourSlot.windDirectionDeg)}
+                      {` · Gusts ${expandedHourSlot.windGustKmh}`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Thermometer size={12} aria-hidden="true" />
+                      <span>Feels Like</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedHourSlot.apparentTempC === 'number'
+                        ? `${expandedHourSlot.apparentTempC}°C`
+                        : `${expandedHourSlot.tempC}°C`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Droplets size={12} aria-hidden="true" />
+                      <span>Humidity</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedHourSlot.humidityPct === 'number'
+                        ? `${expandedHourSlot.humidityPct}%`
+                        : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Cloud size={12} aria-hidden="true" />
+                      <span>Cloud Cover</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedHourSlot.cloudCoverPct === 'number'
+                        ? `${expandedHourSlot.cloudCoverPct}%`
+                        : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Sun size={12} aria-hidden="true" />
+                      <span>UV Index</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedHourSlot.uvIndex === 'number'
+                        ? `${expandedHourSlot.uvIndex}`
+                        : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Row 2: Next 7 Days */}
@@ -388,12 +600,14 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
               <span aria-hidden="true" className="text-xs text-white/35">
                 ·
               </span>
-              <span className="text-xs text-white/55">High / Low</span>
+              <span className="text-xs text-white/55">High / Low · Select to expand</span>
             </div>
 
             <div className="no-scrollbar grid grid-cols-7 gap-1.5 max-[359px]:flex max-[359px]:overflow-x-auto">
               {weather.daily7Days.map((day, idx) => {
                 const isFocused = focus.section === 'daily' && focus.index === idx;
+                const isExpanded =
+                  expandedForecast?.kind === 'daily' && expandedForecast.index === idx;
                 const shortDay = day.dayLabel === 'Tomorrow' ? 'Tmrw' : day.dayLabel;
                 return (
                   <button
@@ -402,15 +616,19 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       dailyCardRefs.current[idx] = el;
                     }}
                     type="button"
+                    aria-expanded={isExpanded}
                     onMouseEnter={() => onFocusChange({ section: 'daily', index: idx })}
                     onFocus={() => onFocusChange({ section: 'daily', index: idx })}
-                    onClick={() => onFocusChange({ section: 'daily', index: idx })}
+                    onClick={() => {
+                      onFocusChange({ section: 'daily', index: idx });
+                      toggleExpandedForecast('daily', idx);
+                    }}
                     className={`flex min-h-[108px] flex-col items-center justify-between rounded-xl border p-1.5 text-center transition-all max-[359px]:min-w-[54px] ${
                       isFocused
                         ? 'border-white bg-white/16 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]'
-                        : day.isBadWeather
-                        ? 'border-amber-300/35 bg-amber-500/12 hover:bg-amber-500/18'
-                        : 'border-white/10 bg-black/35 hover:bg-white/8'
+                        : isExpanded
+                        ? 'border-white/45 bg-white/[0.11]'
+                        : 'border-white/10 bg-white/[0.04] hover:bg-white/[0.08]'
                     }`}
                   >
                     <span className="w-full truncate text-[11px] font-semibold text-white/85 sm:text-xs">
@@ -420,24 +638,137 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       {renderWeatherIcon(
                         day.weatherCode,
                         18,
-                        day.isBadWeather ? 'text-amber-300' : 'text-white/90'
+                        day.isSevereWarning && weather.hasWarning
+                          ? 'text-amber-300'
+                          : 'text-white/90'
                       )}
                     </div>
                     <div className="font-display text-sm leading-tight font-medium text-white tabular-nums sm:text-base">
                       <div>{day.tempMaxC}°</div>
                       <div className="text-xs text-white/60">{day.tempMinC}°</div>
                     </div>
-                    <span
-                      className={`text-[11px] tabular-nums sm:text-xs ${
-                        day.precipProbMax >= 35 ? 'text-amber-200' : 'text-white/60'
-                      }`}
-                    >
+                    <span className="text-[11px] text-white/65 tabular-nums sm:text-xs">
                       {day.precipProbMax}%
                     </span>
                   </button>
                 );
               })}
             </div>
+
+            {expandedDaySlot && (
+              <div
+                ref={expandedDetailRef}
+                className="mt-2 rounded-xl border border-white/15 bg-white/[0.06] p-3.5"
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-2.5">
+                  <div className="flex items-center gap-3">
+                    {renderWeatherIcon(
+                      expandedDaySlot.weatherCode,
+                      26,
+                      expandedDaySlot.isSevereWarning && weather.hasWarning
+                        ? 'text-amber-300'
+                        : 'text-white'
+                    )}
+                    <div>
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="font-display text-sm font-semibold text-white sm:text-base">
+                          {expandedDaySlot.dayLabel}
+                        </span>
+                        <span className="text-xs text-white/60">
+                          {formatShortDateFromIso(expandedDaySlot.dateIso, true)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-white/80 sm:text-sm">
+                        {expandedDaySlot.conditionLabel} · High {expandedDaySlot.tempMaxC}° / Low{' '}
+                        {expandedDaySlot.tempMinC}°C
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedForecast(null)}
+                    aria-label="Collapse daily forecast details"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+
+                <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Droplets size={12} aria-hidden="true" />
+                      <span>Precipitation</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {expandedDaySlot.precipProbMax}% max
+                      {typeof expandedDaySlot.precipSumMm === 'number'
+                        ? ` · ${expandedDaySlot.precipSumMm} mm`
+                        : ''}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Wind size={12} aria-hidden="true" />
+                      <span>Wind</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedDaySlot.windSpeedMaxKmh === 'number'
+                        ? `${expandedDaySlot.windSpeedMaxKmh} km/h `
+                        : ''}
+                      {formatCompassDirection(expandedDaySlot.windDirectionDeg)}
+                      {` · Gusts ${expandedDaySlot.windGustMaxKmh}`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Thermometer size={12} aria-hidden="true" />
+                      <span>Feels Like</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedDaySlot.apparentTempMaxC === 'number' &&
+                      typeof expandedDaySlot.apparentTempMinC === 'number'
+                        ? `${expandedDaySlot.apparentTempMaxC}° / ${expandedDaySlot.apparentTempMinC}°`
+                        : `${expandedDaySlot.tempMaxC}° / ${expandedDaySlot.tempMinC}°`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Sun size={12} aria-hidden="true" />
+                      <span>UV Index Max</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {typeof expandedDaySlot.uvIndexMax === 'number'
+                        ? `${expandedDaySlot.uvIndexMax}`
+                        : '—'}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Sunrise size={12} aria-hidden="true" />
+                      <span>Sunrise</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {formatClockFromIso(expandedDaySlot.sunriseIso)}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-white/55">
+                      <Sunset size={12} aria-hidden="true" />
+                      <span>Sunset</span>
+                    </div>
+                    <div className="mt-0.5 font-medium text-white tabular-nums">
+                      {formatClockFromIso(expandedDaySlot.sunsetIso)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Location & Weather Preferences */}

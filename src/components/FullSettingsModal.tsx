@@ -36,6 +36,7 @@ interface FullSettingsModalProps {
   onToggleWeather: () => void;
   onOpenWeatherModal: () => void;
   onOpenAlbumPicker: () => void;
+  onOpenAppsEditMode: () => void;
   onRestoreDefaultApps: () => void;
   isNativeAndroid?: boolean;
   nativeAppsError?: string | null;
@@ -79,6 +80,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
   onToggleWeather,
   onOpenWeatherModal,
   onOpenAlbumPicker,
+  onOpenAppsEditMode,
   onRestoreDefaultApps,
   isNativeAndroid = false,
   nativeAppsError = null,
@@ -176,29 +178,38 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
       aria-modal="true"
       aria-label="Full Launcher Settings"
     >
-      <div className="tv-surface flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#0F121A]/95 shadow-2xl backdrop-blur-2xl">
+      <div className="tv-surface flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#0F121A]/95 shadow-2xl backdrop-blur-2xl">
         {/* Header */}
-        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-7 sm:py-5">
-          <div className="min-w-0 flex-1">
-            <h2 className="font-display truncate text-lg font-semibold text-white sm:text-xl">
-              Main Settings
-            </h2>
-            <p className="mt-0.5 truncate text-xs text-white/60 sm:text-sm">
-              Launcher display, weather, background albums & GitHub updates
-            </p>
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-3.5 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <img
+              src="/ambient-tv-icon.svg"
+              alt=""
+              aria-hidden="true"
+              className="h-8 w-8 shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <h2 className="font-display truncate text-base font-semibold text-white sm:text-lg">
+                Main Settings
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-white/60">
+                Launcher display, weather, background albums & GitHub updates
+              </p>
+            </div>
           </div>
           <button
             type="button"
+            data-dialog-close="true"
             onClick={onClose}
             aria-label="Close Main Settings"
-            className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-xl text-white/75 hover:bg-white/10 hover:text-white"
+            className="flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-white/75 hover:bg-white/10 hover:text-white"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
         {/* Navigation Tabs (wraps cleanly so tabs & focus outlines never clip) */}
-        <div className="flex shrink-0 flex-wrap gap-2 border-b border-white/10 px-5 py-3 sm:px-7">
+        <div className="flex shrink-0 flex-wrap gap-2 border-b border-white/10 px-5 py-2.5 sm:px-6">
           {tabs.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -207,13 +218,13 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className={`inline-flex min-h-[42px] shrink-0 items-center gap-2 rounded-xl px-4 py-1.5 text-xs font-medium whitespace-nowrap transition-colors sm:text-sm ${
+                className={`inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-1 text-xs font-medium whitespace-nowrap transition-colors sm:text-sm ${
                   active
                     ? 'bg-white font-semibold text-[#07080A]'
                     : 'bg-white/6 text-white/75 hover:bg-white/12 hover:text-white'
                 }`}
               >
-                <Icon size={15} />
+                <Icon size={14} />
                 <span>{t.label}</span>
               </button>
             );
@@ -221,10 +232,10 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
         </div>
 
         {/* Tab Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-6 sm:p-5 sm:pb-6">
           {tab === 'general' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">Show Clock</div>
                   <div className="mt-0.5 text-xs text-white/60">
@@ -236,7 +247,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                   onClick={() =>
                     onUpdateSettings({ showClock: !settings.showClock })
                   }
-                  className={`min-h-[40px] shrink-0 rounded-xl px-4 text-xs font-semibold ${
+                  className={`min-h-[36px] shrink-0 scroll-my-3 rounded-xl px-3.5 text-xs font-semibold ${
                     settings.showClock
                       ? 'bg-white text-[#07080A]'
                       : 'border border-white/15 bg-white/8 text-white'
@@ -246,11 +257,11 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">Clock Format</div>
                   <div className="mt-0.5 text-xs text-white/60">
-                    Sketch default uses 12h local time (12:00 am)
+                    Default uses 12h local time (12:00 am)
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
@@ -259,7 +270,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       key={fmt}
                       type="button"
                       onClick={() => onUpdateSettings({ clockFormat: fmt })}
-                      className={`min-h-[40px] rounded-xl px-3.5 text-xs font-semibold uppercase ${
+                      className={`min-h-[36px] scroll-my-3 rounded-xl px-3 text-xs font-semibold uppercase ${
                         settings.clockFormat === fmt
                           ? 'bg-white text-[#07080A]'
                           : 'border border-white/15 bg-white/5 text-white/75'
@@ -271,14 +282,14 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="text-sm font-medium text-white">
                   Selection Aura
                 </div>
                 <div className="mt-0.5 text-xs text-white/60">
-                  Adjust border glow intensity when navigating tiles (unwraps and wraps between items)
+                  Border glow intensity when navigating tiles (unwraps and wraps between items)
                 </div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-2.5 grid grid-cols-3 gap-2">
                   {(['subtle', 'balanced', 'vivid'] as FerrofluidIntensity[]).map(
                     (level) => (
                       <button
@@ -287,7 +298,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                         onClick={() =>
                           onUpdateSettings({ ferrofluidIntensity: level })
                         }
-                        className={`min-h-[40px] rounded-xl text-xs font-medium capitalize ${
+                        className={`min-h-[36px] scroll-my-3 rounded-xl text-xs font-medium capitalize ${
                           settings.ferrofluidIntensity === level
                             ? 'bg-white font-semibold text-[#07080A]'
                             : 'border border-white/15 bg-white/5 text-white/75'
@@ -300,7 +311,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="font-medium text-white">
                     Backdrop Legibility Scrim
@@ -320,17 +331,17 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                     })
                   }
                   aria-label="Backdrop legibility scrim"
-                  className="mt-2.5 h-2 w-full accent-white"
+                  className="mt-2 h-2 w-full scroll-my-3 accent-white"
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">
                     On-Screen Touch D-Pad Remote
                   </div>
                   <div className="mt-0.5 text-xs text-white/60">
-                    Only controlled from Settings for testing D-pad navigation on touchscreens
+                    For testing D-pad navigation on touchscreens
                   </div>
                 </div>
                 <button
@@ -340,7 +351,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       showTouchRemote: !settings.showTouchRemote,
                     })
                   }
-                  className={`min-h-[40px] shrink-0 rounded-xl px-4 text-xs font-semibold ${
+                  className={`min-h-[36px] shrink-0 scroll-my-3 rounded-xl px-3.5 text-xs font-semibold ${
                     settings.showTouchRemote
                       ? 'bg-white text-[#07080A]'
                       : 'border border-white/15 bg-white/8 text-white'
@@ -353,8 +364,8 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
           )}
 
           {tab === 'weather' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">
                     Top-Right Weather Forecast
@@ -367,7 +378,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 <button
                   type="button"
                   onClick={onToggleWeather}
-                  className={`min-h-[40px] shrink-0 rounded-xl px-4 text-xs font-semibold ${
+                  className={`min-h-[36px] shrink-0 rounded-xl px-3.5 text-xs font-semibold ${
                     weather.enabled
                       ? 'bg-white text-[#07080A]'
                       : 'border border-white/15 bg-white/8 text-white'
@@ -377,7 +388,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </button>
               </div>
 
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">
                     Sync Background to Weather
@@ -393,7 +404,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       syncBackgroundToWeather: !settings.syncBackgroundToWeather,
                     })
                   }
-                  className={`min-h-[40px] shrink-0 rounded-xl px-4 text-xs font-semibold ${
+                  className={`min-h-[36px] shrink-0 rounded-xl px-3.5 text-xs font-semibold ${
                     settings.syncBackgroundToWeather
                       ? 'bg-white text-[#07080A]'
                       : 'border border-white/15 bg-white/8 text-white'
@@ -403,7 +414,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </button>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <div className="text-sm font-medium text-white">
                   Active Location: {weather.activeLocationLabel}
                 </div>
@@ -413,7 +424,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 <button
                   type="button"
                   onClick={onOpenWeatherModal}
-                  className="mt-3 min-h-[44px] rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
+                  className="mt-2.5 min-h-[38px] rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
                 >
                   Configure GPS / Manual City & View 4h Forecast
                 </button>
@@ -422,9 +433,9 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
           )}
 
           {tab === 'albums' && (
-            <div className="space-y-4">
-              <div className="overflow-hidden rounded-2xl border border-white/12 bg-black/40">
-                <div className="aspect-video w-full overflow-hidden">
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center gap-3.5 rounded-2xl border border-white/12 bg-black/40 p-3 sm:flex-nowrap">
+                <div className="aspect-video w-36 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/50 sm:w-44">
                   <img
                     src={activeWallpaper.imageUrl}
                     alt={activeWallpaper.title}
@@ -437,37 +448,41 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-white">
-                      {activeWallpaper.title}
-                    </div>
-                    <div className="truncate text-xs text-white/60">
-                      {activeWallpaper.creator} · Weather tags:{' '}
-                      {getEffectiveWeatherTags(
-                        activeWallpaper,
-                        settings.wallpaperWeatherTags
-                      )
-                        .map((t: WeatherTag) => WEATHER_TAG_LABELS[t])
-                        .join(', ')}
-                    </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-medium text-white/50">
+                    Current Background
                   </div>
-                  <button
-                    type="button"
-                    onClick={onOpenAlbumPicker}
-                    className="min-h-[44px] shrink-0 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
-                  >
-                    Manage Albums
-                  </button>
+                  <div className="mt-0.5 truncate text-sm font-medium text-white">
+                    {activeWallpaper.title}
+                  </div>
+                  <div className="truncate text-xs text-white/60">
+                    {activeWallpaper.creator}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-white/50">
+                    Weather:{' '}
+                    {getEffectiveWeatherTags(
+                      activeWallpaper,
+                      settings.wallpaperWeatherTags
+                    )
+                      .map((t: WeatherTag) => WEATHER_TAG_LABELS[t])
+                      .join(', ')}
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={onOpenAlbumPicker}
+                  className="min-h-[38px] shrink-0 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
+                >
+                  Manage Albums
+                </button>
               </div>
 
-              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <div>
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-white">
                     Sync Background to Weather
                   </div>
-                  <div className="text-xs text-white/60">
+                  <div className="mt-0.5 text-xs text-white/60">
                     Matches ticked albums against live forecast conditions and None-tagged art
                   </div>
                 </div>
@@ -478,7 +493,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       syncBackgroundToWeather: !settings.syncBackgroundToWeather,
                     })
                   }
-                  className={`min-h-[40px] shrink-0 rounded-xl px-4 text-xs font-semibold ${
+                  className={`min-h-[36px] shrink-0 rounded-xl px-3.5 text-xs font-semibold ${
                     settings.syncBackgroundToWeather
                       ? 'bg-white text-[#07080A]'
                       : 'border border-white/15 bg-white/8 text-white'
@@ -491,73 +506,91 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
           )}
 
           {tab === 'apps' && (
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+            <div className="space-y-2.5">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3.5">
                 <div className="text-sm font-medium text-white">
                   Installed Apps ({apps.length})
                 </div>
                 <p className="mt-1 text-xs text-white/65">
                   The first 5 apps in your Apps Drawer automatically appear on the
-                  Default Home screen. Long-press any app in the Apps Drawer to
-                  move or uninstall it.
+                  Default Home screen. Hold OK on any app or use Edit Mode below
+                  to move, inspect, or uninstall apps without launching them.
                 </p>
                 {isNativeAndroid && nativeAppsError && (
-                  <div className="mt-3 rounded-xl border border-amber-400/35 bg-amber-500/12 px-3.5 py-2.5 text-xs text-amber-200">
+                  <div className="mt-2.5 rounded-xl border border-amber-400/35 bg-amber-500/12 px-3 py-2 text-xs text-amber-200">
                     {nativeAppsError}
                   </div>
                 )}
                 {isNativeAndroid && !nativeAppsError && apps.length === 0 && !nativeAppsLoading && (
-                  <div className="mt-3 rounded-xl border border-white/15 bg-black/30 px-3.5 py-2.5 text-xs text-white/75">
+                  <div className="mt-2.5 rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-xs text-white/75">
                     No launchable Android TV apps returned yet. Try refreshing below.
                   </div>
                 )}
-                {isNativeAndroid ? (
-                  onRefreshNativeApps && (
-                    <button
-                      type="button"
-                      disabled={nativeAppsLoading}
-                      onClick={onRefreshNativeApps}
-                      className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/18 disabled:opacity-60"
-                    >
-                      <RefreshCw
-                        size={14}
-                        className={nativeAppsLoading ? 'animate-spin' : ''}
-                      />
-                      <span>
-                        {nativeAppsLoading
-                          ? 'Scanning Installed TV Apps…'
-                          : 'Refresh Installed TV Apps'}
-                      </span>
-                    </button>
-                  )
-                ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={onRestoreDefaultApps}
-                    className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/18"
+                    onClick={onOpenAppsEditMode}
+                    className="inline-flex min-h-[38px] items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
                   >
-                    <RotateCcw size={14} />
-                    <span>Restore Default Apps & Order</span>
+                    <span>Manage / Reorder Apps (Edit Mode)</span>
                   </button>
-                )}
+
+                  {isNativeAndroid ? (
+                    onRefreshNativeApps && (
+                      <button
+                        type="button"
+                        disabled={nativeAppsLoading}
+                        onClick={onRefreshNativeApps}
+                        className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/18 disabled:opacity-60"
+                      >
+                        <RefreshCw
+                          size={14}
+                          className={nativeAppsLoading ? 'animate-spin' : ''}
+                        />
+                        <span>
+                          {nativeAppsLoading
+                            ? 'Scanning Installed TV Apps…'
+                            : 'Refresh Installed TV Apps'}
+                        </span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onRestoreDefaultApps}
+                      className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/18"
+                    >
+                      <RotateCcw size={14} />
+                      <span>Restore Default Apps & Order</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {tab === 'github' && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs text-white/55">Installed Version</div>
-                  <div className="font-display mt-0.5 text-lg font-semibold text-white tabular-nums">
-                    v{installedVersion}
+            <div className="space-y-2.5 pb-1">
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <img
+                    src="/ambient-tv-icon.svg"
+                    alt=""
+                    aria-hidden="true"
+                    className="h-9 w-9 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-white/55">Installed Version</div>
+                    <div className="font-display mt-0.5 text-base font-semibold text-white tabular-nums sm:text-lg">
+                      v{installedVersion}
+                    </div>
                   </div>
                 </div>
                 <button
                   type="button"
                   disabled={checkingUpdate}
                   onClick={() => void handleCheckUpdates()}
-                  className="inline-flex min-h-[44px] shrink-0 items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90 disabled:opacity-60"
+                  className="inline-flex min-h-[38px] shrink-0 scroll-my-3 items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90 disabled:opacity-60"
                 >
                   <RefreshCw
                     size={14}
@@ -569,7 +602,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </button>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                 <label
                   htmlFor="github-release-repo"
                   className="block text-xs font-semibold text-white"
@@ -579,14 +612,14 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 <p className="mt-0.5 text-xs text-white/60">
                   Enter your separate public GitHub repo (<code>owner/repo</code>) where builds publish APK releases.
                 </p>
-                <div className="mt-2.5 flex gap-2">
+                <div className="mt-2 flex gap-2">
                   <input
                     id="github-release-repo"
                     type="text"
                     value={repoInput}
                     onChange={(e) => setRepoInput(e.target.value)}
                     placeholder="username/ambient-tv-releases"
-                    className="min-h-[44px] flex-1 rounded-xl border border-white/15 bg-black/40 px-3.5 text-sm text-white placeholder:text-white/40 focus:border-white/40 focus:outline-none"
+                    className="min-h-[38px] flex-1 scroll-my-4 rounded-xl border border-white/15 bg-black/40 px-3 text-xs text-white placeholder:text-white/40 focus:border-white/40 focus:outline-none sm:text-sm"
                   />
                   <button
                     type="button"
@@ -602,7 +635,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       setRepoInput(slug);
                       onUpdateSettings({ publicReleaseRepo: slug });
                     }}
-                    className="min-h-[44px] rounded-xl border border-white/15 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/20"
+                    className="min-h-[38px] shrink-0 scroll-my-4 rounded-xl border border-white/15 bg-white/10 px-4 text-xs font-medium text-white hover:bg-white/20"
                   >
                     Save
                   </button>
@@ -610,13 +643,13 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
               </div>
 
               {updateError && (
-                <div className="rounded-2xl border border-amber-400/35 bg-amber-500/12 p-4 text-xs text-amber-200">
+                <div className="rounded-2xl border border-amber-400/35 bg-amber-500/12 p-3 text-xs text-amber-200">
                   {updateError}
                 </div>
               )}
 
               {latestRelease && (
-                <div className="rounded-2xl border border-white/15 bg-black/35 p-4">
+                <div className="rounded-2xl border border-white/15 bg-black/35 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <CheckCircle2
@@ -644,13 +677,13 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                     </p>
                   )}
 
-                  <div className="mt-3 flex flex-wrap gap-2">
+                  <div className="mt-2.5 flex flex-wrap gap-2">
                     {latestRelease.apkUrl && (
                       <a
                         href={latestRelease.apkUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
+                        className="inline-flex min-h-[38px] items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
                       >
                         <Download size={14} />
                         <span>
@@ -662,7 +695,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                       href={latestRelease.htmlUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 text-xs font-medium text-white hover:bg-white/15"
+                      className="inline-flex min-h-[38px] items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 text-xs font-medium text-white hover:bg-white/15"
                     >
                       <span>View Release</span>
                       <ExternalLink size={14} />
@@ -671,7 +704,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </div>
               )}
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-xs leading-relaxed text-white/65">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-white/65">
                 <div className="font-semibold text-white/85">
                   Private Build → Public Release Setup
                 </div>

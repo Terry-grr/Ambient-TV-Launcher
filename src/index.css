@@ -109,7 +109,7 @@ html.tv-perf .tv-surface {
 /* 52-inch TV 10-foot UI scale balanced for native Android TV WebView */
 @media (min-width: 640px) {
   html.tv-perf {
-    font-size: 14.5px;
+    font-size: 12.5px;
   }
 }
 

@@ -11,6 +11,7 @@ import {
   DEFAULT_MANUAL_CITY,
   DEFAULT_SETTINGS,
   DEFAULT_SLIDESHOW_POOLS,
+  DEFAULT_TV_INPUTS,
 } from './data/defaults';
 import {
   AppItem,
@@ -21,6 +22,7 @@ import {
   ManualCityOption,
   ModalOverlay,
   SlideshowPoolKey,
+  TvInputDevice,
   WallpaperItem,
   WeatherState,
   WeatherTag,
@@ -46,9 +48,12 @@ import {
 } from './services/wallpaperCatalogService';
 import {
   getNativeBluetoothState,
+  getNativeTvInputs,
   openAndroidBluetoothSettings,
+  openAndroidInputSettings,
   openAndroidSystemSettings,
   requestNativeBluetoothPermission,
+  switchNativeTvInput,
   toggleNativeBluetooth,
 } from './services/systemSettings';
 import {
@@ -206,8 +211,14 @@ function moveDialogFocus(
   const cx = curRect.left + curRect.width / 2;
   const cy = curRect.top + curRect.height / 2;
 
-  let bestEl: HTMLElement | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
+  const validCandidates: Array<{
+    el: HTMLElement;
+    candCy: number;
+    primary: number;
+    cross: number;
+    overlapsCross: boolean;
+    isCloseCand: boolean;
+  }> = [];
 
   for (const cand of focusables) {
     if (cand === active) continue;
@@ -247,10 +258,42 @@ function moveDialogFocus(
     }
 
     if (!valid) continue;
-    const score = overlapsCross ? primary + cross * 0.35 : primary + cross * 2.6;
+    const isCloseCand =
+      cand.dataset.dialogClose === 'true' ||
+      Boolean(cand.getAttribute('aria-label')?.startsWith('Close'));
+    validCandidates.push({
+      el: cand,
+      candCy,
+      primary,
+      cross,
+      overlapsCross,
+      isCloseCand,
+    });
+  }
+
+  let bestEl: HTMLElement | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const c of validCandidates) {
+    let score =
+      dir === 'up' || dir === 'down'
+        ? c.primary * 2.0 + (c.overlapsCross ? c.cross * 0.25 : c.cross * 0.8)
+        : c.overlapsCross
+        ? c.primary + c.cross * 0.35
+        : c.primary + c.cross * 2.6;
+
+    if (dir === 'up' && c.isCloseCand) {
+      const hasLowerNonClose = validCandidates.some(
+        (other) => !other.isCloseCand && other.candCy > c.candCy + 14
+      );
+      if (hasLowerNonClose) {
+        score += 5000;
+      }
+    }
+
     if (score < bestScore) {
       bestScore = score;
-      bestEl = cand;
+      bestEl = c.el;
     }
   }
 
@@ -282,11 +325,17 @@ export default function App() {
   const [weatherActivateSignal, setWeatherActivateSignal] = useState<number>(0);
   const [ambientRevealSignal, setAmbientRevealSignal] = useState<number>(0);
   const [movingAppId, setMovingAppId] = useState<string | null>(null);
+  const [editAppsMode, setEditAppsMode] = useState<boolean>(false);
   const [btPermissionRequired, setBtPermissionRequired] = useState<boolean>(false);
   const [btLoading, setBtLoading] = useState<boolean>(false);
   const btRefreshInFlightRef = useRef(false);
+  const [inputsLoading, setInputsLoading] = useState<boolean>(false);
+  const inputsRefreshInFlightRef = useRef(false);
 
   const isNativeAndroid = isNativeAndroidPlatform();
+  const [tvInputs, setTvInputs] = useState<TvInputDevice[]>(() =>
+    isNativeAndroid ? [] : DEFAULT_TV_INPUTS
+  );
 
   useEffect(() => {
     if (!isNativeAndroid) return;
@@ -488,17 +537,45 @@ export default function App() {
     }
   }, [isNativeAndroid]);
 
+  const refreshNativeTvInputs = useCallback(async () => {
+    if (!isNativeAndroid || inputsRefreshInFlightRef.current) return;
+    inputsRefreshInFlightRef.current = true;
+    setInputsLoading(true);
+    try {
+      const snapshot = await getNativeTvInputs();
+      if (snapshot) {
+        setTvInputs(snapshot.inputs);
+        if (snapshot.inputs.length > 0) {
+          setSettings((s) => {
+            if (snapshot.inputs.some((inp) => inp.name === s.activeInput)) {
+              return s;
+            }
+            const preferred =
+              snapshot.inputs.find((inp) => inp.state === 'connected') ?? snapshot.inputs[0];
+            return preferred ? { ...s, activeInput: preferred.name } : s;
+          });
+        }
+      }
+    } finally {
+      inputsRefreshInFlightRef.current = false;
+      setInputsLoading(false);
+    }
+  }, [isNativeAndroid]);
+
   useEffect(() => {
     if (!isNativeAndroid || screen !== 'quick-settings') return;
     void refreshNativeBluetooth();
+    void refreshNativeTvInputs();
 
     const onResume = () => {
       if (document.visibilityState === 'visible') {
         void refreshNativeBluetooth();
+        void refreshNativeTvInputs();
       }
     };
     const onFocus = () => {
       void refreshNativeBluetooth();
+      void refreshNativeTvInputs();
     };
     document.addEventListener('visibilitychange', onResume);
     window.addEventListener('focus', onFocus);
@@ -506,7 +583,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', onResume);
       window.removeEventListener('focus', onFocus);
     };
-  }, [isNativeAndroid, screen, refreshNativeBluetooth]);
+  }, [isNativeAndroid, screen, refreshNativeBluetooth, refreshNativeTvInputs]);
 
   // Persist apps (web preview) & package order (Android TV), settings, wallpaper preferences
   useEffect(() => {
@@ -820,6 +897,16 @@ export default function App() {
 
   const suppressOkLaunchUntilRef = useRef<number>(0);
 
+  const openAppActionModal = useCallback(
+    (appId: string, from: 'default' | 'drawer', suppressLaunch = true) => {
+      if (suppressLaunch) {
+        suppressOkLaunchUntilRef.current = performance.now() + 500;
+      }
+      setModal({ type: 'app-action', appId, from });
+    },
+    []
+  );
+
   const handleLaunchApp = useCallback(
     (app: AppItem) => {
       if (performance.now() < suppressOkLaunchUntilRef.current) {
@@ -923,6 +1010,43 @@ export default function App() {
     await requestNativeBluetoothPermission();
     await refreshNativeBluetooth();
   }, [refreshNativeBluetooth]);
+
+  const handleOpenInputSettings = useCallback(async () => {
+    const res = await openAndroidInputSettings();
+    if (!res.launched) {
+      if (res.reason === 'web-preview') {
+        showStatusToast(
+          'Android TV Input Settings',
+          'Opens Android TV Inputs / Display settings in APK'
+        );
+      } else {
+        showStatusToast(
+          'TV Input Settings Unavailable',
+          'Could not open Android TV input settings'
+        );
+      }
+    }
+  }, [showStatusToast]);
+
+  const handleSelectTvInput = useCallback(
+    async (input: TvInputDevice) => {
+      setSettings((s) => ({ ...s, activeInput: input.name }));
+      if (!isNativeAndroid) {
+        showStatusToast(`Switched input to ${input.name}`, input.detail || 'Preview');
+        return;
+      }
+
+      const res = await switchNativeTvInput(input.id);
+      if (!res.switched) {
+        showStatusToast(
+          `Unable to switch directly to ${input.name}`,
+          'Opening TV Input Settings instead'
+        );
+        await handleOpenInputSettings();
+      }
+    },
+    [isNativeAndroid, showStatusToast, handleOpenInputSettings]
+  );
 
   // Reorder / Uninstall handlers
   const handleSwapOrMoveApp = useCallback(
@@ -1232,7 +1356,7 @@ export default function App() {
         } else if (dir === 'down') {
           nextIndex = Math.min(apps.length - 1, drawerFocusIndex + cols);
         } else if (dir === 'up') {
-          if (drawerFocusIndex < cols && !movingAppId) {
+          if (drawerFocusIndex < cols && !movingAppId && !editAppsMode) {
             setHomeFocusIndex(Math.min(drawerFocusIndex, pinnedApps.length - 1));
             setScreen('default');
             return;
@@ -1255,6 +1379,7 @@ export default function App() {
       drawerFocusIndex,
       apps.length,
       movingAppId,
+      editAppsMode,
       weather.hourly24Hours.length,
       weather.daily7Days.length,
       weatherFocus,
@@ -1299,7 +1424,12 @@ export default function App() {
         activeEl.click();
         return;
       }
-      if (weatherFocus.section === 'header' || weatherFocus.section === 'controls') {
+      if (
+        weatherFocus.section === 'header' ||
+        weatherFocus.section === 'hourly' ||
+        weatherFocus.section === 'daily' ||
+        weatherFocus.section === 'controls'
+      ) {
         setWeatherActivateSignal((n) => n + 1);
       }
     } else if (screen === 'apps-drawer') {
@@ -1307,7 +1437,13 @@ export default function App() {
         setMovingAppId(null);
       } else {
         const app = apps[drawerFocusIndex];
-        if (app) handleLaunchApp(app);
+        if (app) {
+          if (editAppsMode) {
+            openAppActionModal(app.id, 'drawer', false);
+          } else {
+            handleLaunchApp(app);
+          }
+        }
       }
     } else if (screen === 'quick-settings') {
       quickSettingsRef.current?.activateFocused();
@@ -1320,8 +1456,10 @@ export default function App() {
     apps,
     drawerFocusIndex,
     movingAppId,
+    editAppsMode,
     weatherFocus.section,
     handleLaunchApp,
+    openAppActionModal,
   ]);
 
   const handleOkLongPress = useCallback(() => {
@@ -1329,17 +1467,17 @@ export default function App() {
     if (screen === 'default') {
       const app = pinnedApps[homeFocusIndex];
       if (app) {
+        openAppActionModal(app.id, 'default', true);
         suppressOkLaunchUntilRef.current = performance.now() + 2000;
-        setModal({ type: 'app-action', appId: app.id, from: 'default' });
       }
     } else if (screen === 'apps-drawer') {
       const app = apps[drawerFocusIndex];
       if (app) {
+        openAppActionModal(app.id, 'drawer', true);
         suppressOkLaunchUntilRef.current = performance.now() + 2000;
-        setModal({ type: 'app-action', appId: app.id, from: 'drawer' });
       }
     }
-  }, [modal, screen, pinnedApps, homeFocusIndex, apps, drawerFocusIndex]);
+  }, [modal, screen, pinnedApps, homeFocusIndex, apps, drawerFocusIndex, openAppActionModal]);
 
   const handleBack = useCallback(() => {
     if (modal) {
@@ -1354,15 +1492,36 @@ export default function App() {
       setMovingAppId(null);
       return;
     }
+    if (screen === 'apps-drawer' && editAppsMode) {
+      setEditAppsMode(false);
+      return;
+    }
+    if (screen === 'weather') {
+      const subEvent = new CustomEvent('tv-weather-subback', { cancelable: true });
+      if (!window.dispatchEvent(subEvent)) {
+        return;
+      }
+    }
     if (screen !== 'default') {
+      setEditAppsMode(false);
       setScreen('default');
     }
-  }, [modal, movingAppId, screen]);
+  }, [modal, movingAppId, screen, editAppsMode]);
 
-  // Keyboard D-pad & Android TV Hardware Back listener
+  // Keyboard D-pad & Android TV Hardware Back / OK long-press listener
   const enterHoldTimerRef = useRef<number | null>(null);
   const enterDidHoldRef = useRef(false);
   const enterHeldActiveRef = useRef(false);
+  const handleDirectionRef = useRef(handleDirection);
+  handleDirectionRef.current = handleDirection;
+  const handleBackRef = useRef(handleBack);
+  handleBackRef.current = handleBack;
+  const handleOkTapRef = useRef(handleOkTap);
+  handleOkTapRef.current = handleOkTap;
+  const handleOkLongPressRef = useRef(handleOkLongPress);
+  handleOkLongPressRef.current = handleOkLongPress;
+  const modalRef = useRef(modal);
+  modalRef.current = modal;
 
   useEffect(() => {
     const isOkRemoteKey = (e: KeyboardEvent) =>
@@ -1390,7 +1549,7 @@ export default function App() {
       ) {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
-        handleBack();
+        handleBackRef.current();
         return;
       }
 
@@ -1399,7 +1558,7 @@ export default function App() {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
         if (isTextInput) (targetEl as HTMLElement).blur();
-        handleDirection('up');
+        handleDirectionRef.current('up');
         return;
       }
       if (e.key === 'ArrowDown') {
@@ -1407,7 +1566,7 @@ export default function App() {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
         if (isTextInput) (targetEl as HTMLElement).blur();
-        handleDirection('down');
+        handleDirectionRef.current('down');
         return;
       }
 
@@ -1431,14 +1590,14 @@ export default function App() {
             e.preventDefault();
             setTouchRemoteSuppressed(true);
             inputEl.blur();
-            handleDirection('left');
+            handleDirectionRef.current('left');
             return;
           }
           if (e.key === 'ArrowRight' && atEnd) {
             e.preventDefault();
             setTouchRemoteSuppressed(true);
             inputEl.blur();
-            handleDirection('right');
+            handleDirectionRef.current('right');
             return;
           }
         }
@@ -1448,11 +1607,11 @@ export default function App() {
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
-        handleDirection('left');
+        handleDirectionRef.current('left');
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
-        handleDirection('right');
+        handleDirectionRef.current('right');
       } else if (isOkRemoteKey(e)) {
         if (tag === 'SELECT') return;
         e.preventDefault();
@@ -1460,11 +1619,11 @@ export default function App() {
           return;
         }
         setTouchRemoteSuppressed(true);
-        if (modal) {
+        if (modalRef.current) {
           if (performance.now() < suppressOkLaunchUntilRef.current) {
             return;
           }
-          handleOkTap();
+          handleOkTapRef.current();
           return;
         }
         enterDidHoldRef.current = false;
@@ -1474,8 +1633,8 @@ export default function App() {
         }
         enterHoldTimerRef.current = window.setTimeout(() => {
           enterDidHoldRef.current = true;
-          handleOkLongPress();
-        }, 500);
+          handleOkLongPressRef.current();
+        }, 420);
       }
     };
 
@@ -1519,8 +1678,8 @@ export default function App() {
 
       if (enterHeldActiveRef.current) {
         enterHeldActiveRef.current = false;
-        if (!modal && performance.now() >= suppressOkLaunchUntilRef.current) {
-          handleOkTap();
+        if (!modalRef.current && performance.now() >= suppressOkLaunchUntilRef.current) {
+          handleOkTapRef.current();
         }
       }
     };
@@ -1540,7 +1699,29 @@ export default function App() {
 
     const onHardwareBack = () => {
       setTouchRemoteSuppressed(true);
-      handleBack();
+      handleBackRef.current();
+    };
+
+    const onHardwareOkLongPress = () => {
+      setTouchRemoteSuppressed(true);
+      if (enterHoldTimerRef.current) {
+        window.clearTimeout(enterHoldTimerRef.current);
+        enterHoldTimerRef.current = null;
+      }
+      enterDidHoldRef.current = true;
+      enterHeldActiveRef.current = false;
+      suppressOkLaunchUntilRef.current = performance.now() + 2000;
+      handleOkLongPressRef.current();
+    };
+
+    const onHardwareOkLongPressEnd = () => {
+      if (enterHoldTimerRef.current) {
+        window.clearTimeout(enterHoldTimerRef.current);
+        enterHoldTimerRef.current = null;
+      }
+      enterDidHoldRef.current = false;
+      enterHeldActiveRef.current = false;
+      suppressOkLaunchUntilRef.current = performance.now() + 250;
     };
 
     window.addEventListener('keydown', onKeyDown, true);
@@ -1549,6 +1730,8 @@ export default function App() {
     window.addEventListener('click', onCaptureClick, true);
     window.addEventListener('pointerup', onCapturePointerUp, true);
     window.addEventListener('tv-hardware-back', onHardwareBack);
+    window.addEventListener('tv-hardware-ok-longpress', onHardwareOkLongPress);
+    window.addEventListener('tv-hardware-ok-longpress-end', onHardwareOkLongPressEnd);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keypress', onKeyPress, true);
@@ -1556,9 +1739,11 @@ export default function App() {
       window.removeEventListener('click', onCaptureClick, true);
       window.removeEventListener('pointerup', onCapturePointerUp, true);
       window.removeEventListener('tv-hardware-back', onHardwareBack);
+      window.removeEventListener('tv-hardware-ok-longpress', onHardwareOkLongPress);
+      window.removeEventListener('tv-hardware-ok-longpress-end', onHardwareOkLongPressEnd);
       if (enterHoldTimerRef.current) window.clearTimeout(enterHoldTimerRef.current);
     };
-  }, [handleDirection, handleBack, handleOkTap, handleOkLongPress, modal]);
+  }, []);
 
   // Touch swipe navigation between Default / Ambient / Quick Settings / Apps Drawer
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -1651,7 +1836,7 @@ export default function App() {
 
       {/* SCREEN 1: DEFAULT HOME VIEW ("Default after on") */}
       {screen !== 'ambient' && screen !== 'apps-drawer' && (
-        <div className="relative z-10 flex h-full w-full flex-col justify-between p-5 sm:px-14 sm:py-10">
+        <div className="relative z-10 flex h-full w-full flex-col justify-between px-5 pt-5 pb-0 sm:px-14 sm:pt-10 sm:pb-0">
           {/* Top Row: Optional 12h Local Clock (left) & Weather Forecast (right) */}
           <header className="flex items-start justify-between gap-4">
             <div className="flex flex-col items-start">
@@ -1685,12 +1870,12 @@ export default function App() {
             />
           </header>
 
-          {/* Bottom Dock: Centered 5 Pinned 16:9 Apps + Bottom Navigation Row */}
+          {/* Bottom Dock: 5 Pinned 16:9 Apps (bottom distance == left/right edge distance on TV) + chevrons centered inside that gap */}
           <footer className="flex w-full flex-col items-center">
-            {/* 5 Pinned App Slots symmetrically centered (1st & 5th equidistant from edges) */}
+            {/* 5 Pinned App Slots symmetrically aligned to container edges */}
             <div
               ref={dockRef}
-              className="relative mx-auto grid w-full max-w-[92vw] grid-cols-5 gap-2.5 overflow-visible px-1 py-2.5 sm:max-w-5xl sm:gap-5"
+              className="relative grid w-full grid-cols-5 gap-2 overflow-visible sm:gap-5"
             >
               <FerrofluidAura
                 containerRef={dockRef}
@@ -1710,13 +1895,7 @@ export default function App() {
                   isFocused={homeFocusIndex === idx}
                   onFocus={() => setHomeFocusIndex(idx)}
                   onSelect={() => handleLaunchApp(app)}
-                  onLongPress={() =>
-                    setModal({
-                      type: 'app-action',
-                      appId: app.id,
-                      from: 'default',
-                    })
-                  }
+                  onLongPress={() => openAppActionModal(app.id, 'default', true)}
                   tileRef={(el) => {
                     dockTileRefs.current[app.id] = el;
                   }}
@@ -1724,8 +1903,8 @@ export default function App() {
               ))}
             </div>
 
-            {/* Bottom bar: Quick Settings (bottom-left corner) aligned with Down Chevron (bottom-center) */}
-            <div className="mt-2 grid w-full grid-cols-3 items-center">
+            {/* Bottom gap: Quick Settings chevron (left) & Down chevron (center) placed inside the bottom margin */}
+            <div className="grid h-10 w-full grid-cols-3 items-center sm:h-14">
               <div className="flex justify-start">
                 <button
                   type="button"
@@ -1734,14 +1913,14 @@ export default function App() {
                     setScreen('quick-settings');
                   }}
                   aria-label="Open Quick Settings"
-                  className="group flex min-h-[48px] items-center justify-center gap-1 rounded-full px-2 text-white/70 transition-all hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-95 sm:px-2.5"
+                  className="group flex h-9 items-center justify-center gap-1 rounded-full px-2 text-white/70 transition-all hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-95 sm:h-11 sm:px-2.5"
                 >
                   <ChevronLeft
                     size={16}
                     className="transition-transform group-hover:-translate-x-0.5"
                     aria-hidden="true"
                   />
-                  <Settings size={20} strokeWidth={1.75} aria-hidden="true" />
+                  <Settings size={19} strokeWidth={1.75} aria-hidden="true" />
                 </button>
               </div>
 
@@ -1753,9 +1932,9 @@ export default function App() {
                     setScreen('apps-drawer');
                   }}
                   aria-label="Open all apps drawer"
-                  className="flex min-h-[48px] min-w-[84px] items-center justify-center rounded-full text-white/80 transition-all hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-95"
+                  className="flex h-9 min-w-[76px] items-center justify-center rounded-full text-white/80 transition-all hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 active:scale-95 sm:h-11 sm:min-w-[84px]"
                 >
-                  <ChevronDown size={26} />
+                  <ChevronDown size={24} />
                 </button>
               </div>
 
@@ -1786,6 +1965,7 @@ export default function App() {
             apps={apps}
             focusedIndex={drawerFocusIndex}
             movingAppId={movingAppId}
+            editAppsMode={editAppsMode}
             showClock={settings.showClock}
             timeText={timeText}
             weather={weather}
@@ -1799,25 +1979,27 @@ export default function App() {
                 } else {
                   handleSwapOrMoveApp(idx);
                 }
+              } else if (editAppsMode) {
+                openAppActionModal(app.id, 'drawer', false);
               } else {
                 handleLaunchApp(app);
               }
             }}
-            onLongPressApp={(app) =>
-              setModal({
-                type: 'app-action',
-                appId: app.id,
-                from: 'drawer',
-              })
-            }
+            onLongPressApp={(app) => openAppActionModal(app.id, 'drawer', true)}
+            onToggleEditAppsMode={() => {
+              setMovingAppId(null);
+              setEditAppsMode((v) => !v);
+            }}
             onDoneMoving={() => setMovingAppId(null)}
             onOpenWeatherDetail={() => {
               setMovingAppId(null);
+              setEditAppsMode(false);
               setWeatherFocus({ section: 'hourly', index: 0 });
               setScreen('weather');
             }}
             onBackHome={() => {
               setMovingAppId(null);
+              setEditAppsMode(false);
               setScreen('default');
             }}
           />
@@ -1833,6 +2015,11 @@ export default function App() {
         settings={settings}
         weather={weather}
         isNativeAndroid={isNativeAndroid}
+        tvInputs={tvInputs}
+        inputsLoading={inputsLoading}
+        onExpandInputs={() => void refreshNativeTvInputs()}
+        onSelectTvInput={(inp) => void handleSelectTvInput(inp)}
+        onOpenInputSettings={() => void handleOpenInputSettings()}
         btPermissionRequired={btPermissionRequired}
         btLoading={btLoading}
         onExpandBluetooth={() => void refreshNativeBluetooth()}
@@ -1903,6 +2090,7 @@ export default function App() {
         onHome={() => {
           setModal(null);
           setMovingAppId(null);
+          setEditAppsMode(false);
           setScreen('default');
         }}
         onHide={() => setSettings((s) => ({ ...s, showTouchRemote: false }))}
@@ -2100,6 +2288,12 @@ export default function App() {
             setScreen('weather');
           }}
           onOpenAlbumPicker={() => setModal({ type: 'album-picker' })}
+          onOpenAppsEditMode={() => {
+            setModal(null);
+            setMovingAppId(null);
+            setEditAppsMode(true);
+            setScreen('apps-drawer');
+          }}
           onRestoreDefaultApps={() => {
             setApps(DEFAULT_APPS);
             setHomeFocusIndex(0);

@@ -2,6 +2,9 @@
 
 A calm, minimalist Android TV / Google TV home screen built around uninterrupted artwork, weather awareness, and fluid remote-first navigation.
 
+> [!IMPORTANT]
+> **Beta Software · Hobby Project**: Ambient TV Launcher is an independent personal hobby project currently in **beta**. Features, layouts, and D-pad behaviors are actively evolving, and some hardware/OEM-specific features (such as TV input switching, Bluetooth status, or launcher overrides) may behave differently across Android TV / Google TV devices. Use at your own discretion and please back up or keep your stock launcher available via ADB when testing.
+
 > [!NOTE]
 > Public APK releases and synchronized GPL-3.0 source code are published together to this repository starting from secondary releases (`v0.1.0+`).
 

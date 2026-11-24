@@ -326,24 +326,25 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
       aria-modal="true"
       aria-label="Background Album Picker"
     >
-      <div className="tv-surface flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#0F121A]/95 shadow-2xl backdrop-blur-2xl">
+      <div className="tv-surface flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#0F121A]/95 shadow-2xl backdrop-blur-2xl">
         {/* Header */}
-        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-7 sm:py-5">
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-3.5 sm:px-6 sm:py-4">
           <div className="min-w-0 flex-1">
-            <h2 className="font-display truncate text-lg font-semibold text-white sm:text-xl">
+            <h2 className="font-display truncate text-base font-semibold text-white sm:text-lg">
               Background Albums
             </h2>
-            <p className="mt-0.5 truncate text-xs text-white/60 sm:text-sm">
+            <p className="mt-0.5 truncate text-xs text-white/60">
               {allCombined.length} wallpapers · {activePoolCount} in active slideshow
             </p>
           </div>
           <button
             type="button"
+            data-dialog-close="true"
             onClick={onClose}
             aria-label="Close Background Albums"
-            className="flex min-h-[42px] min-w-[42px] shrink-0 items-center justify-center rounded-xl text-white/75 hover:bg-white/10 hover:text-white"
+            className="flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-white/75 hover:bg-white/10 hover:text-white"
           >
-            <X size={19} />
+            <X size={18} />
           </button>
         </div>
 
@@ -351,7 +352,7 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
         <div
           role="tablist"
           aria-label="Album settings sections"
-          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-5 py-3 sm:px-7"
+          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 px-5 py-2.5 sm:px-6"
         >
           {topTabs.map((t) => {
             const Icon = t.icon;
@@ -367,13 +368,13 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                   setOpenFilterMenu(null);
                   setSectionTab(t.id);
                 }}
-                className={`inline-flex min-h-[40px] shrink-0 items-center gap-2 rounded-xl px-4 py-1.5 text-xs font-medium whitespace-nowrap transition-colors sm:text-sm ${
+                className={`inline-flex min-h-[38px] shrink-0 items-center gap-1.5 rounded-xl px-3.5 py-1 text-xs font-medium whitespace-nowrap transition-colors sm:text-sm ${
                   active
                     ? 'bg-white font-semibold text-[#07080A]'
                     : 'bg-white/6 text-white/75 hover:bg-white/12 hover:text-white'
                 }`}
               >
-                <Icon size={15} />
+                <Icon size={14} />
                 <span>{t.label}</span>
               </button>
             );
@@ -381,7 +382,7 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
         </div>
 
         {/* Scrollable Section Body */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-6 sm:p-5 sm:pb-6">
           {sectionTab === 'images' && (
             <div className="space-y-4">
               {/* Compact 3-stop Filter Row */}

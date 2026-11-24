@@ -226,6 +226,41 @@ export interface ForecastPayload {
   badWeatherChanceMax: number;
 }
 
+async function fetchOfficialAreaAlertHeadline(
+  lat: number,
+  lon: number
+): Promise<string | null> {
+  // US National Weather Service active CAP alerts (keyless CORS endpoint; returns 400 outside US)
+  try {
+    const data = (await fetchJsonWithTimeout(
+      `https://api.weather.gov/alerts/active?point=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`,
+      2500
+    )) as {
+      features?: Array<{
+        properties?: {
+          status?: string;
+          messageType?: string;
+          severity?: string;
+          event?: string;
+          headline?: string;
+        };
+      }>;
+    };
+    const features = Array.isArray(data?.features) ? data.features : [];
+    const active = features.find((f) => {
+      const props = f?.properties;
+      if (!props) return false;
+      if (props.status && props.status !== 'Actual') return false;
+      if (props.messageType === 'Cancel') return false;
+      return Boolean(props.event || props.headline);
+    });
+    if (!active?.properties) return null;
+    return active.properties.event || active.properties.headline || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchFourHourForecast(
   latitude: number,
   longitude: number
@@ -237,11 +272,14 @@ export async function fetchFourHourForecast(
     `?latitude=${encodeURIComponent(lat)}` +
     `&longitude=${encodeURIComponent(lon)}` +
     `&current=temperature_2m,weather_code,wind_speed_10m,wind_gusts_10m` +
-    `&hourly=temperature_2m,precipitation_probability,weather_code,wind_gusts_10m` +
-    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_gusts_10m_max` +
+    `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,cloud_cover,uv_index,wind_speed_10m,wind_gusts_10m,wind_direction_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,uv_index_max,sunrise,sunset` +
     `&forecast_hours=25&forecast_days=7&timezone=auto`;
 
-  const res = await fetch(url);
+  const [res, officialAlertHeadline] = await Promise.all([
+    fetch(url),
+    fetchOfficialAreaAlertHeadline(lat, lon),
+  ]);
   if (!res.ok) {
     throw new Error('Weather feed unavailable');
   }
@@ -252,9 +290,16 @@ export async function fetchFourHourForecast(
 
   const times: string[] = data.hourly?.time ?? [];
   const temps: number[] = data.hourly?.temperature_2m ?? [];
+  const apparentTemps: number[] = data.hourly?.apparent_temperature ?? [];
+  const humidities: number[] = data.hourly?.relative_humidity_2m ?? [];
   const probs: number[] = data.hourly?.precipitation_probability ?? [];
+  const precips: number[] = data.hourly?.precipitation ?? [];
   const codes: number[] = data.hourly?.weather_code ?? [];
+  const cloudCovers: number[] = data.hourly?.cloud_cover ?? [];
+  const uvIndices: number[] = data.hourly?.uv_index ?? [];
+  const windSpeeds: number[] = data.hourly?.wind_speed_10m ?? [];
   const gusts: number[] = data.hourly?.wind_gusts_10m ?? [];
+  const windDirs: number[] = data.hourly?.wind_direction_10m ?? [];
 
   // Take the next 24 upcoming hours (skipping index 0 when 25 slots are returned)
   const startIdx = times.length >= 25 ? 1 : 0;
@@ -274,58 +319,71 @@ export async function fetchFourHourForecast(
     const prob = Math.round(Number(probs[idx] ?? 0));
     const gust = Math.round(Number(gusts[idx] ?? 0));
     const isHighWind = gust >= 45;
-    const isSevere = wmoInfo.isSevereWarning || gust >= 55;
+    const isSevere = wmoInfo.isSevereWarning || gust >= 70;
     const isBad = wmoInfo.isBadWeather || prob >= 25 || isHighWind;
 
     hourly24Hours.push({
       timeIso: iso,
       timeLabel,
       tempC: Math.round(Number(temps[idx] ?? 0)),
+      apparentTempC: Math.round(Number(apparentTemps[idx] ?? temps[idx] ?? 0)),
       precipProb: prob,
+      precipMm: Math.round(Number(precips[idx] ?? 0) * 10) / 10,
+      humidityPct: Math.round(Number(humidities[idx] ?? 0)),
+      cloudCoverPct: Math.round(Number(cloudCovers[idx] ?? 0)),
+      uvIndex: Math.round(Number(uvIndices[idx] ?? 0) * 10) / 10,
       weatherCode: wmo,
       conditionLabel: wmoInfo.label,
+      windSpeedKmh: Math.round(Number(windSpeeds[idx] ?? 0)),
       windGustKmh: gust,
+      windDirectionDeg: Math.round(Number(windDirs[idx] ?? 0)),
       isBadWeather: isBad,
       isSevereWarning: isSevere,
     });
   }
 
-  // Next 4 hours warning summary for Home widget & immediate alert
+  // Next 4 hours summary: only severe storm/gale/official alerts mark hasWarning = true
   const nextFourHours = hourly24Hours.slice(0, 4);
-  let severeTrigger: string | null = null;
+  let severeTrigger: string | null = officialAlertHeadline;
+  let likelyPrecipNote: string | null = null;
   let badWeatherChanceMax = 0;
 
   for (const slot of nextFourHours) {
     if (slot.precipProb > badWeatherChanceMax) {
       badWeatherChanceMax = slot.precipProb;
     }
+    const wmoInfo = interpretWmoCode(slot.weatherCode);
     if (!severeTrigger) {
-      const wmoInfo = interpretWmoCode(slot.weatherCode);
       if (wmoInfo.isSevereWarning) {
         severeTrigger = `${wmoInfo.label} expected around ${slot.timeLabel}`;
-      } else if (slot.windGustKmh >= 55) {
+      } else if (slot.windGustKmh >= 70) {
         severeTrigger = `Strong wind gusts (${slot.windGustKmh} km/h) at ${slot.timeLabel}`;
-      } else if (slot.precipProb >= 65) {
-        severeTrigger = `${slot.precipProb}% chance of ${slot.conditionLabel.toLowerCase()} at ${slot.timeLabel}`;
       }
+    }
+    if (!likelyPrecipNote && slot.precipProb >= 65) {
+      likelyPrecipNote = `${slot.precipProb}% chance of ${slot.conditionLabel.toLowerCase()} at ${slot.timeLabel}`;
     }
   }
 
   const anyBadWeather = nextFourHours.some((h) => h.isBadWeather);
   const firstBad = nextFourHours.find((h) => h.isBadWeather);
-  const warningHeadline =
-    severeTrigger ??
+  const plainForecastNote =
+    likelyPrecipNote ??
     (anyBadWeather && firstBad
       ? badWeatherChanceMax >= 25
         ? `${badWeatherChanceMax}% chance of ${firstBad.conditionLabel.toLowerCase()} in next 4h`
         : `${firstBad.conditionLabel} possible in next 4h`
       : null);
 
-  // Extended severe/advisory check for the 24h drawer banner when next 4h are calm
+  const warningHeadline = severeTrigger ?? plainForecastNote;
+
+  // Extended check for the 24h/7d drawer when next 4h are calm
+  let hasSevereIn24h = Boolean(severeTrigger);
   let extendedWarningHeadline: string | null = warningHeadline;
   if (!extendedWarningHeadline) {
     const severeHour = hourly24Hours.find((h) => h.isSevereWarning);
     if (severeHour) {
+      hasSevereIn24h = true;
       extendedWarningHeadline = `${severeHour.conditionLabel} expected around ${severeHour.timeLabel}`;
     } else {
       const likelyRainHour = hourly24Hours.find((h) => h.precipProb >= 65);
@@ -340,15 +398,23 @@ export async function fetchFourHourForecast(
   const dayCodes: number[] = data.daily?.weather_code ?? [];
   const dayMaxTemps: number[] = data.daily?.temperature_2m_max ?? [];
   const dayMinTemps: number[] = data.daily?.temperature_2m_min ?? [];
+  const dayApparentMax: number[] = data.daily?.apparent_temperature_max ?? [];
+  const dayApparentMin: number[] = data.daily?.apparent_temperature_min ?? [];
   const dayProbs: number[] = data.daily?.precipitation_probability_max ?? [];
+  const dayPrecipSums: number[] = data.daily?.precipitation_sum ?? [];
+  const dayWindMax: number[] = data.daily?.wind_speed_10m_max ?? [];
   const dayGusts: number[] = data.daily?.wind_gusts_10m_max ?? [];
+  const dayWindDirs: number[] = data.daily?.wind_direction_10m_dominant ?? [];
+  const dayUvMax: number[] = data.daily?.uv_index_max ?? [];
+  const daySunrise: string[] = data.daily?.sunrise ?? [];
+  const daySunset: string[] = data.daily?.sunset ?? [];
 
   const daily7Days: WeatherDaySlice[] = dayTimes.slice(0, 7).map((dateIso, i) => {
     const wmo = Number(dayCodes[i] ?? 0);
     const wmoInfo = interpretWmoCode(wmo);
     const precipProbMax = Math.round(Number(dayProbs[i] ?? 0));
     const windGustMaxKmh = Math.round(Number(dayGusts[i] ?? 0));
-    const isSevere = wmoInfo.isSevereWarning || windGustMaxKmh >= 60;
+    const isSevere = wmoInfo.isSevereWarning || windGustMaxKmh >= 75;
     const isBad = wmoInfo.isBadWeather || precipProbMax >= 35 || windGustMaxKmh >= 50;
 
     let dayLabel = `Day ${i + 1}`;
@@ -368,8 +434,16 @@ export async function fetchFourHourForecast(
       conditionLabel: wmoInfo.label,
       tempMaxC: Math.round(Number(dayMaxTemps[i] ?? 0)),
       tempMinC: Math.round(Number(dayMinTemps[i] ?? 0)),
+      apparentTempMaxC: Math.round(Number(dayApparentMax[i] ?? dayMaxTemps[i] ?? 0)),
+      apparentTempMinC: Math.round(Number(dayApparentMin[i] ?? dayMinTemps[i] ?? 0)),
       precipProbMax,
+      precipSumMm: Math.round(Number(dayPrecipSums[i] ?? 0) * 10) / 10,
+      windSpeedMaxKmh: Math.round(Number(dayWindMax[i] ?? 0)),
       windGustMaxKmh,
+      windDirectionDeg: Math.round(Number(dayWindDirs[i] ?? 0)),
+      uvIndexMax: Math.round(Number(dayUvMax[i] ?? 0) * 10) / 10,
+      sunriseIso: daySunrise[i],
+      sunsetIso: daySunset[i],
       isBadWeather: isBad,
       isSevereWarning: isSevere,
     };
@@ -378,6 +452,7 @@ export async function fetchFourHourForecast(
   if (!extendedWarningHeadline) {
     const severeDay = daily7Days.find((d) => d.isSevereWarning);
     if (severeDay) {
+      hasSevereIn24h = true;
       extendedWarningHeadline = `${severeDay.dayLabel}: ${severeDay.conditionLabel} advisory`;
     }
   }
@@ -393,7 +468,7 @@ export async function fetchFourHourForecast(
     nextFourHours,
     hourly24Hours,
     daily7Days,
-    hasWarning: Boolean(severeTrigger || anyBadWeather),
+    hasWarning: Boolean(officialAlertHeadline || hasSevereIn24h),
     warningHeadline,
     extendedWarningHeadline,
     badWeatherChanceMax,

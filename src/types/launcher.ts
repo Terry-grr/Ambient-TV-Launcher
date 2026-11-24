@@ -64,10 +64,17 @@ export interface WeatherHourSlice {
   timeIso: string;
   timeLabel: string;
   tempC: number;
+  apparentTempC?: number;
   precipProb: number;
+  precipMm?: number;
+  humidityPct?: number;
+  cloudCoverPct?: number;
+  uvIndex?: number;
   weatherCode: number;
   conditionLabel: string;
+  windSpeedKmh?: number;
   windGustKmh: number;
+  windDirectionDeg?: number;
   isBadWeather: boolean;
   isSevereWarning?: boolean;
 }
@@ -79,8 +86,16 @@ export interface WeatherDaySlice {
   conditionLabel: string;
   tempMaxC: number;
   tempMinC: number;
+  apparentTempMaxC?: number;
+  apparentTempMinC?: number;
   precipProbMax: number;
+  precipSumMm?: number;
+  windSpeedMaxKmh?: number;
   windGustMaxKmh: number;
+  windDirectionDeg?: number;
+  uvIndexMax?: number;
+  sunriseIso?: string;
+  sunsetIso?: string;
   isBadWeather: boolean;
   isSevereWarning: boolean;
 }
@@ -125,6 +140,16 @@ export interface BluetoothDevice {
   connected: boolean;
   battery?: number;
   address?: string;
+}
+
+export interface TvInputDevice {
+  id: string;
+  name: string;
+  detail: string;
+  type: 'hdmi' | 'tuner' | 'composite' | 'component' | 'displayport' | 'other';
+  state: 'connected' | 'standby' | 'disconnected';
+  isPassthrough: boolean;
+  packageName?: string;
 }
 
 export interface LauncherSettings {

@@ -10,6 +10,7 @@ import {
   Bluetooth,
   ChevronRight,
   CloudSun,
+  ExternalLink,
   Gamepad2,
   Headphones,
   Image as ImageIcon,
@@ -21,11 +22,12 @@ import {
   Wifi,
   X,
 } from 'lucide-react';
-import { TV_INPUTS, WIFI_NETWORKS } from '../data/defaults';
+import { WIFI_NETWORKS } from '../data/defaults';
 import {
   BluetoothDevice,
   FerrofluidIntensity,
   LauncherSettings,
+  TvInputDevice,
   WeatherState,
 } from '../types/launcher';
 import { FerrofluidAura } from './FerrofluidAura';
@@ -42,6 +44,11 @@ interface QuickSettingsDrawerProps {
   settings: LauncherSettings;
   weather: WeatherState;
   isNativeAndroid?: boolean;
+  tvInputs?: TvInputDevice[];
+  inputsLoading?: boolean;
+  onExpandInputs?: () => void;
+  onSelectTvInput?: (input: TvInputDevice) => void;
+  onOpenInputSettings?: () => void;
   btPermissionRequired?: boolean;
   btLoading?: boolean;
   onExpandBluetooth?: () => void;
@@ -88,6 +95,11 @@ export const QuickSettingsDrawer = forwardRef<
       settings,
       weather,
       isNativeAndroid = false,
+      tvInputs = [],
+      inputsLoading = false,
+      onExpandInputs,
+      onSelectTvInput,
+      onOpenInputSettings,
       btPermissionRequired = false,
       btLoading = false,
       onExpandBluetooth,
@@ -298,9 +310,20 @@ export const QuickSettingsDrawer = forwardRef<
       {
         id: 'qs-inputs',
         label: 'Inputs',
-        sub: settings.activeInput,
+        sub:
+          tvInputs.length > 0
+            ? `${tvInputs.filter((i) => i.state === 'connected').length || tvInputs.length} available · ${settings.activeInput}`
+            : settings.activeInput,
         icon: Monitor,
-        action: () => setExpandedPanel((p) => (p === 'inputs' ? null : 'inputs')),
+        action: () => {
+          setExpandedPanel((p) => {
+            const next = p === 'inputs' ? null : 'inputs';
+            if (next === 'inputs') {
+              onExpandInputs?.();
+            }
+            return next;
+          });
+        },
       },
       {
         id: 'qs-wifi',
@@ -383,16 +406,24 @@ export const QuickSettingsDrawer = forwardRef<
         {/* Compact Slide-out Quick Settings Drawer */}
         <aside
           ref={asideRef}
-          className="tv-surface relative z-10 flex h-full w-[min(86vw,380px)] flex-col border-r border-white/15 bg-[#0C0F16]/88 p-4 shadow-2xl backdrop-blur-2xl sm:w-[min(42vw,400px)] sm:p-5"
+          className="tv-surface relative z-10 flex h-full w-[min(84vw,340px)] flex-col border-r border-white/15 bg-[#0C0F16]/88 p-4 shadow-2xl backdrop-blur-2xl sm:w-[min(36vw,350px)] sm:p-5"
         >
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-3">
-            <div className="min-w-0 flex-1">
-              <h2 className="font-display truncate text-base font-semibold text-white sm:text-lg">
-                Quick Settings
-              </h2>
-              <p className="truncate text-[11px] text-white/60 sm:text-xs">
-                Launcher controls · Arrows or tap
-              </p>
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+              <img
+                src="/ambient-tv-icon.svg"
+                alt=""
+                aria-hidden="true"
+                className="h-7 w-7 shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <h2 className="font-display truncate text-base font-semibold text-white sm:text-lg">
+                  Quick Settings
+                </h2>
+                <p className="truncate text-[11px] text-white/60 sm:text-xs">
+                  Launcher controls · Arrows or tap
+                </p>
+              </div>
             </div>
             <button
               type="button"
@@ -503,34 +534,81 @@ export const QuickSettingsDrawer = forwardRef<
                   {/* Inputs Panel */}
                   {row.id === 'qs-inputs' && expandedPanel === 'inputs' && (
                     <div className="mt-1 mb-1.5 space-y-1 rounded-xl border border-white/10 bg-black/35 p-2">
-                      {TV_INPUTS.map((inp, i) => {
-                        const subId = `qs-input-${i}`;
-                        const subFocused = focusedControlId === subId;
-                        return (
-                          <button
-                            key={inp.id}
-                            type="button"
-                            data-qs-id={subId}
-                            onFocus={() => handleControlFocus(subId, null)}
-                            onClick={() => {
-                              handleControlFocus(subId, null);
-                              onUpdateSettings({ activeInput: inp.name });
-                            }}
-                            className={`flex min-h-[40px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors focus:outline-none ${
-                              subFocused
-                                ? 'border-white bg-white/20 text-white'
-                                : settings.activeInput === inp.name
-                                ? 'border-transparent bg-white/15 text-white'
-                                : 'border-transparent text-white/75 hover:bg-white/8'
-                            }`}
-                          >
-                            <span className="min-w-0 truncate font-medium">{inp.name}</span>
-                            <span className="shrink-0 text-[11px] text-white/55">
-                              {inp.detail}
-                            </span>
-                          </button>
-                        );
-                      })}
+                      {inputsLoading && tvInputs.length === 0 ? (
+                        <p className="px-2 py-2 text-xs text-white/60">
+                          Reading TV inputs…
+                        </p>
+                      ) : tvInputs.length === 0 ? (
+                        <p className="px-2 py-2 text-xs text-white/60">
+                          No external HDMI or tuner inputs reported on this device.
+                        </p>
+                      ) : (
+                        tvInputs.map((inp, i) => {
+                          const subId = `qs-input-${i}`;
+                          const subFocused = focusedControlId === subId;
+                          const isSelected = settings.activeInput === inp.name;
+                          return (
+                            <button
+                              key={inp.id}
+                              type="button"
+                              data-qs-id={subId}
+                              onFocus={() => handleControlFocus(subId, null)}
+                              onClick={() => {
+                                handleControlFocus(subId, null);
+                                if (onSelectTvInput) {
+                                  onSelectTvInput(inp);
+                                } else {
+                                  onUpdateSettings({ activeInput: inp.name });
+                                }
+                              }}
+                              className={`flex min-h-[40px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-left text-xs transition-colors focus:outline-none ${
+                                subFocused
+                                  ? 'border-white bg-white/20 text-white'
+                                  : isSelected
+                                  ? 'border-transparent bg-white/15 text-white'
+                                  : 'border-transparent text-white/75 hover:bg-white/8'
+                              }`}
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span
+                                  aria-hidden="true"
+                                  className={`h-2 w-2 shrink-0 rounded-full ${
+                                    inp.state === 'connected'
+                                      ? 'bg-emerald-400'
+                                      : inp.state === 'standby'
+                                      ? 'bg-amber-300/80'
+                                      : 'bg-white/25'
+                                  }`}
+                                />
+                                <span className="truncate font-medium">{inp.name}</span>
+                              </div>
+                              <span className="shrink-0 text-[11px] text-white/55">
+                                {inp.detail}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+
+                      {onOpenInputSettings && (
+                        <button
+                          type="button"
+                          data-qs-id="qs-input-settings"
+                          onFocus={() => handleControlFocus('qs-input-settings', null)}
+                          onClick={() => {
+                            handleControlFocus('qs-input-settings', null);
+                            onOpenInputSettings();
+                          }}
+                          className={`mt-1 flex min-h-[40px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium text-white focus:outline-none ${
+                            focusedControlId === 'qs-input-settings'
+                              ? 'border-white bg-white/20'
+                              : 'border-white/12 bg-white/10 hover:bg-white/15'
+                          }`}
+                        >
+                          <span>TV Input Settings</span>
+                          <ExternalLink size={14} className="shrink-0 text-white/75" />
+                        </button>
+                      )}
                     </div>
                   )}
 

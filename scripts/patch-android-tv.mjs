@@ -46,9 +46,11 @@ for (const feature of tvFeatures) {
   }
 }
 
-// Package visibility queries for Android 11+ (Leanback & Standard launchers + Settings + Bluetooth)
+// Package visibility queries for Android 11+ (Leanback & Standard launchers + Settings + Bluetooth + Live TV / Inputs)
 const queriesBlock = `    <queries>
         <package android:name="com.android.tv.settings" />
+        <package android:name="com.google.android.tv" />
+        <package android:name="com.android.tv" />
         <intent>
             <action android:name="android.settings.SETTINGS" />
         </intent>
@@ -56,7 +58,14 @@ const queriesBlock = `    <queries>
             <action android:name="android.settings.BLUETOOTH_SETTINGS" />
         </intent>
         <intent>
+            <action android:name="android.settings.DISPLAY_SETTINGS" />
+        </intent>
+        <intent>
             <action android:name="android.settings.APPLICATION_DETAILS_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:host="android.media.tv" />
         </intent>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -83,10 +92,12 @@ if (manifest.includes('android:allowBackup="true"')) {
   );
 }
 
-if (!manifest.includes('android:banner=')) {
+if (manifest.includes('android:banner=')) {
+  manifest = manifest.replace(/android:banner="[^"]*"/, 'android:banner="@drawable/tv_banner"');
+} else {
   manifest = manifest.replace(
     '<application',
-    '<application\n        android:banner="@mipmap/ic_launcher"'
+    '<application\n        android:banner="@drawable/tv_banner"'
   );
 }
 
@@ -176,9 +187,14 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.tv.TvContract;
+import android.media.tv.TvInputInfo;
+import android.media.tv.TvInputManager;
+import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
 import androidx.core.content.ContextCompat;
@@ -509,6 +525,321 @@ public class TvSystemSettingsPlugin extends Plugin {
             call.resolve(res);
         } catch (Exception ex) {
             call.reject("Unable to open Bluetooth settings", ex);
+        }
+    }
+
+    private String mapTvInputType(int type) {
+        switch (type) {
+            case TvInputInfo.TYPE_HDMI:
+                return "hdmi";
+            case TvInputInfo.TYPE_TUNER:
+                return "tuner";
+            case TvInputInfo.TYPE_COMPOSITE:
+                return "composite";
+            case TvInputInfo.TYPE_COMPONENT:
+                return "component";
+            case TvInputInfo.TYPE_DISPLAY_PORT:
+                return "displayport";
+            default:
+                return "other";
+        }
+    }
+
+    private String defaultTvInputLabel(int type) {
+        switch (type) {
+            case TvInputInfo.TYPE_HDMI:
+                return "HDMI";
+            case TvInputInfo.TYPE_TUNER:
+                return "Live TV";
+            case TvInputInfo.TYPE_COMPOSITE:
+                return "Composite (AV)";
+            case TvInputInfo.TYPE_COMPONENT:
+                return "Component";
+            case TvInputInfo.TYPE_DISPLAY_PORT:
+                return "DisplayPort";
+            case TvInputInfo.TYPE_DVI:
+                return "DVI";
+            case TvInputInfo.TYPE_VGA:
+                return "VGA";
+            case TvInputInfo.TYPE_SCART:
+                return "SCART";
+            default:
+                return "TV Input";
+        }
+    }
+
+    @PluginMethod
+    public void getTvInputs(PluginCall call) {
+        try {
+            TvInputManager tvManager = (TvInputManager) getContext().getSystemService(Context.TV_INPUT_SERVICE);
+            if (tvManager == null) {
+                JSObject res = new JSObject();
+                res.put("supported", false);
+                res.put("inputs", new JSArray());
+                call.resolve(res);
+                return;
+            }
+
+            List<TvInputInfo> rawList = tvManager.getTvInputList();
+            List<JSObject> items = new ArrayList<>();
+            if (rawList != null) {
+                for (TvInputInfo info : rawList) {
+                    if (info == null) continue;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        try {
+                            if (info.isHidden(getContext())) continue;
+                        } catch (Throwable ignored) {
+                            // Keep visible if hidden check fails
+                        }
+                    }
+
+                    String id = info.getId();
+                    if (id == null || id.trim().isEmpty()) continue;
+
+                    String baseLabel = "";
+                    try {
+                        CharSequence cs = info.loadLabel(getContext());
+                        if (cs != null) baseLabel = cs.toString().trim();
+                    } catch (Throwable ignored) {
+                        baseLabel = "";
+                    }
+
+                    String customLabel = "";
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        try {
+                            CharSequence cs = info.loadCustomLabel(getContext());
+                            if (cs != null) customLabel = cs.toString().trim();
+                        } catch (Throwable ignored) {
+                            customLabel = "";
+                        }
+                    }
+
+                    String name = !customLabel.isEmpty()
+                        ? customLabel
+                        : (!baseLabel.isEmpty() ? baseLabel : defaultTvInputLabel(info.getType()));
+
+                    String cecName = "";
+                    try {
+                        Method hdmiMethod = info.getClass().getMethod("getHdmiDeviceInfo");
+                        Object hdmiInfo = hdmiMethod.invoke(info);
+                        if (hdmiInfo != null) {
+                            Method displayNameMethod = hdmiInfo.getClass().getMethod("getDisplayName");
+                            Object displayNameObj = displayNameMethod.invoke(hdmiInfo);
+                            if (displayNameObj != null) {
+                                cecName = displayNameObj.toString().trim();
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                        cecName = "";
+                    }
+
+                    int stateCode = TvInputManager.INPUT_STATE_DISCONNECTED;
+                    try {
+                        stateCode = tvManager.getInputState(id);
+                    } catch (Throwable ignored) {
+                        stateCode = TvInputManager.INPUT_STATE_DISCONNECTED;
+                    }
+
+                    String stateStr = "disconnected";
+                    String stateLabel = "No signal";
+                    if (stateCode == TvInputManager.INPUT_STATE_CONNECTED) {
+                        stateStr = "connected";
+                        stateLabel = "Connected";
+                    } else if (stateCode == TvInputManager.INPUT_STATE_CONNECTED_STANDBY) {
+                        stateStr = "standby";
+                        stateLabel = "Standby";
+                    }
+
+                    String detail = stateLabel;
+                    if (!cecName.isEmpty() && !cecName.equalsIgnoreCase(name)) {
+                        detail = cecName + " · " + stateLabel;
+                    } else if (!customLabel.isEmpty() && !baseLabel.isEmpty() && !customLabel.equalsIgnoreCase(baseLabel)) {
+                        detail = baseLabel + " · " + stateLabel;
+                    } else if (!info.isPassthroughInput() && info.getType() == TvInputInfo.TYPE_TUNER) {
+                        detail = "Channels";
+                    }
+
+                    String pkgName = "";
+                    if (info.getServiceInfo() != null && info.getServiceInfo().packageName != null) {
+                        pkgName = info.getServiceInfo().packageName;
+                    }
+
+                    JSObject entry = new JSObject();
+                    entry.put("id", id);
+                    entry.put("name", name);
+                    entry.put("detail", detail);
+                    entry.put("type", mapTvInputType(info.getType()));
+                    entry.put("state", stateStr);
+                    entry.put("isPassthrough", info.isPassthroughInput());
+                    entry.put("packageName", pkgName);
+                    items.add(entry);
+                }
+            }
+
+            Collections.sort(items, new Comparator<JSObject>() {
+                @Override
+                public int compare(JSObject a, JSObject b) {
+                    boolean pa = a.optBoolean("isPassthrough", false);
+                    boolean pb = b.optBoolean("isPassthrough", false);
+                    if (pa != pb) return pa ? -1 : 1;
+                    boolean ca = "connected".equals(a.optString("state"));
+                    boolean cb = "connected".equals(b.optString("state"));
+                    if (ca != cb) return ca ? -1 : 1;
+                    return a.optString("name", "").compareToIgnoreCase(b.optString("name", ""));
+                }
+            });
+
+            JSArray arr = new JSArray();
+            for (JSObject item : items) {
+                arr.put(item);
+            }
+
+            JSObject res = new JSObject();
+            res.put("supported", true);
+            res.put("inputs", arr);
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("Unable to read TV inputs", ex);
+        }
+    }
+
+    @PluginMethod
+    public void switchTvInput(PluginCall call) {
+        String inputId = call.getString("inputId", "");
+        if (inputId == null || inputId.trim().isEmpty()) {
+            call.reject("inputId is required");
+            return;
+        }
+
+        PackageManager pm = getContext().getPackageManager();
+        TvInputManager tvManager = (TvInputManager) getContext().getSystemService(Context.TV_INPUT_SERVICE);
+        TvInputInfo matched = null;
+        if (tvManager != null && tvManager.getTvInputList() != null) {
+            for (TvInputInfo info : tvManager.getTvInputList()) {
+                if (info != null && inputId.equals(info.getId())) {
+                    matched = info;
+                    break;
+                }
+            }
+        }
+
+        // 1. Direct passthrough input switch (HDMI, Composite, Component, VGA, DisplayPort)
+        if (matched == null || matched.isPassthroughInput()) {
+            try {
+                Uri passthroughUri = TvContract.buildChannelUriForPassthroughInput(inputId);
+                Intent viewIntent = new Intent(Intent.ACTION_VIEW, passthroughUri);
+                viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (viewIntent.resolveActivity(pm) != null) {
+                    getContext().startActivity(viewIntent);
+                    JSObject res = new JSObject();
+                    res.put("switched", true);
+                    res.put("method", "passthrough-uri");
+                    call.resolve(res);
+                    return;
+                }
+            } catch (Throwable ignored) {
+                // Try explicit TV player / channels fallback
+            }
+        }
+
+        // 2. Live Channels / Tuner input via TvContract.Channels.CONTENT_URI
+        if (matched != null && matched.getType() == TvInputInfo.TYPE_TUNER) {
+            try {
+                Intent liveIntent = new Intent(Intent.ACTION_VIEW, TvContract.Channels.CONTENT_URI);
+                liveIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (liveIntent.resolveActivity(pm) != null) {
+                    getContext().startActivity(liveIntent);
+                    JSObject res = new JSObject();
+                    res.put("switched", true);
+                    res.put("method", "channels-uri");
+                    call.resolve(res);
+                    return;
+                }
+            } catch (Throwable ignored) {
+                // Try service setup or package launch
+            }
+        }
+
+        // 3. Input service setup intent or hosting package Leanback launch
+        if (matched != null) {
+            try {
+                Intent setupIntent = matched.createSetupIntent();
+                if (setupIntent != null) {
+                    setupIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    if (setupIntent.resolveActivity(pm) != null) {
+                        getContext().startActivity(setupIntent);
+                        JSObject res = new JSObject();
+                        res.put("switched", true);
+                        res.put("method", "setup-intent");
+                        call.resolve(res);
+                        return;
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Fall back to package launch
+            }
+
+            if (matched.getServiceInfo() != null && matched.getServiceInfo().packageName != null) {
+                String pkg = matched.getServiceInfo().packageName;
+                if (!pkg.equals("com.android.tv.inputs") && !pkg.equals(getContext().getPackageName())) {
+                    Intent pkgIntent = pm.getLeanbackLaunchIntentForPackage(pkg);
+                    if (pkgIntent == null) {
+                        pkgIntent = pm.getLaunchIntentForPackage(pkg);
+                    }
+                    if (pkgIntent != null) {
+                        pkgIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        try {
+                            getContext().startActivity(pkgIntent);
+                            JSObject res = new JSObject();
+                            res.put("switched", true);
+                            res.put("method", "package-launch");
+                            call.resolve(res);
+                            return;
+                        } catch (Throwable ignored) {
+                            // Fall through
+                        }
+                    }
+                }
+            }
+        }
+
+        JSObject res = new JSObject();
+        res.put("switched", false);
+        res.put("method", "unavailable");
+        call.resolve(res);
+    }
+
+    @PluginMethod
+    public void openTvInputSettings(PluginCall call) {
+        PackageManager pm = getContext().getPackageManager();
+        String[][] knownActivities = new String[][] {
+            new String[] { "com.android.tv.settings", "com.android.tv.settings.inputs.InputsActivity" },
+            new String[] { "com.android.tv.settings", "com.android.tv.settings.device.inputs.InputsActivity" },
+        };
+        for (String[] pair : knownActivities) {
+            try {
+                Intent intent = new Intent();
+                intent.setComponent(new ComponentName(pair[0], pair[1]));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (intent.resolveActivity(pm) != null) {
+                    getContext().startActivity(intent);
+                    JSObject res = new JSObject();
+                    res.put("target", pair[1]);
+                    call.resolve(res);
+                    return;
+                }
+            } catch (Throwable ignored) {
+                // Try next known activity
+            }
+        }
+
+        try {
+            String target = launchSettingsAction(Settings.ACTION_DISPLAY_SETTINGS);
+            JSObject res = new JSObject();
+            res.put("target", target);
+            call.resolve(res);
+        } catch (Exception ex) {
+            call.reject("Unable to open TV input settings", ex);
         }
     }
 }
@@ -896,22 +1227,44 @@ class TvAppsPlugin : Plugin() {
   console.log('Generated TvAppsPlugin.kt.');
 
   const mainActivityPath = path.join(javaPkgDir, 'MainActivity.java');
-  if (fs.existsSync(mainActivityPath)) {
-    let mainActivity = fs.readFileSync(mainActivityPath, 'utf8');
+  const mainActivityJava = `package com.ambient.tvlauncher;
 
-    if (!mainActivity.includes('import android.os.Bundle;')) {
-      mainActivity = mainActivity.replace(
-        'import com.getcapacitor.BridgeActivity;',
-        'import android.os.Bundle;\nimport androidx.activity.OnBackPressedCallback;\nimport com.getcapacitor.BridgeActivity;'
-      );
-    } else if (!mainActivity.includes('OnBackPressedCallback')) {
-      mainActivity = mainActivity.replace(
-        'import com.getcapacitor.BridgeActivity;',
-        'import androidx.activity.OnBackPressedCallback;\nimport com.getcapacitor.BridgeActivity;'
-      );
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.KeyEvent;
+import androidx.activity.OnBackPressedCallback;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    private static final long OK_LONG_PRESS_MS = 420L;
+    private final Handler okHandler = new Handler(Looper.getMainLooper());
+    private boolean okLongPressTriggered = false;
+    private final Runnable okLongPressRunnable = () -> {
+        okLongPressTriggered = true;
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().post(() ->
+                getBridge().getWebView().evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('tv-hardware-ok-longpress'));",
+                    null
+                )
+            );
+        }
+    };
+
+    private boolean isOkKeyCode(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+            || keyCode == KeyEvent.KEYCODE_ENTER
+            || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER;
     }
 
-    const backCallbackSnippet = `        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(TvSystemSettingsPlugin.class);
+        registerPlugin(TvAppsPlugin.class);
+        super.onCreate(savedInstanceState);
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 if (getBridge() != null && getBridge().getWebView() != null) {
@@ -923,43 +1276,202 @@ class TvAppsPlugin : Plugin() {
                     );
                 }
             }
-        });`;
+        });
+    }
 
-    if (mainActivity.includes('public class MainActivity extends BridgeActivity {}')) {
-      mainActivity = mainActivity.replace(
-        'public class MainActivity extends BridgeActivity {}',
-        `public class MainActivity extends BridgeActivity {
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(TvSystemSettingsPlugin.class);
-        registerPlugin(TvAppsPlugin.class);
-        super.onCreate(savedInstanceState);
-${backCallbackSnippet}
-    }
-}`
-      );
-    } else {
-      if (!mainActivity.includes('registerPlugin(TvSystemSettingsPlugin.class);')) {
-        mainActivity = mainActivity.replace(
-          'super.onCreate(savedInstanceState);',
-          'registerPlugin(TvSystemSettingsPlugin.class);\n        super.onCreate(savedInstanceState);'
-        );
-      }
-      if (!mainActivity.includes('registerPlugin(TvAppsPlugin.class);')) {
-        mainActivity = mainActivity.replace(
-          'super.onCreate(savedInstanceState);',
-          'registerPlugin(TvAppsPlugin.class);\n        super.onCreate(savedInstanceState);'
-        );
-      }
-      if (!mainActivity.includes('tv-hardware-back')) {
-        mainActivity = mainActivity.replace(
-          'super.onCreate(savedInstanceState);',
-          `super.onCreate(savedInstanceState);\n${backCallbackSnippet}`
-        );
-      }
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (isOkKeyCode(event.getKeyCode())) {
+            int action = event.getAction();
+            if (action == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) {
+                    okHandler.removeCallbacks(okLongPressRunnable);
+                    okLongPressTriggered = false;
+                    okHandler.postDelayed(okLongPressRunnable, OK_LONG_PRESS_MS);
+                } else if (okLongPressTriggered) {
+                    return true;
+                }
+            } else if (action == KeyEvent.ACTION_UP) {
+                okHandler.removeCallbacks(okLongPressRunnable);
+                if (okLongPressTriggered) {
+                    okLongPressTriggered = false;
+                    if (getBridge() != null && getBridge().getWebView() != null) {
+                        getBridge().getWebView().post(() ->
+                            getBridge().getWebView().evaluateJavascript(
+                                "window.dispatchEvent(new CustomEvent('tv-hardware-ok-longpress-end'));",
+                                null
+                            )
+                        );
+                    }
+                    return true;
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
-    fs.writeFileSync(mainActivityPath, mainActivity, 'utf8');
-    console.log('Registered TvSystemSettingsPlugin, TvAppsPlugin & hardware Back bridge in MainActivity.java.');
-  }
+    @Override
+    public void onDestroy() {
+        okHandler.removeCallbacks(okLongPressRunnable);
+        super.onDestroy();
+    }
 }
+`;
+  fs.writeFileSync(mainActivityPath, mainActivityJava, 'utf8');
+  console.log('Generated MainActivity.java with native OK long-press & hardware Back bridge.');
+}
+
+// Generate Android adaptive launcher icon & 16:9 TV banner VectorDrawables from user SVG logo
+const resDir = path.resolve(process.cwd(), 'android/app/src/main/res');
+if (fs.existsSync(resDir)) {
+  const drawableDir = path.join(resDir, 'drawable');
+  const drawableV24Dir = path.join(resDir, 'drawable-v24');
+  const mipmapAnyDpiDir = path.join(resDir, 'mipmap-anydpi-v26');
+  fs.mkdirSync(drawableDir, { recursive: true });
+  fs.mkdirSync(drawableV24Dir, { recursive: true });
+  fs.mkdirSync(mipmapAnyDpiDir, { recursive: true });
+
+  const logoShapesXml = `            <!-- TV top (lightest) -->
+            <path
+                android:fillColor="#FF8A9CC2"
+                android:pathData="M116,222 L170,190 L414,190 L362,222 Z" />
+            <!-- TV side (darkest) -->
+            <path
+                android:fillColor="#FF34415C"
+                android:pathData="M362,222 L414,190 L414,366 L362,406 Z" />
+            <!-- TV front (mid) -->
+            <path
+                android:fillColor="#FF4A5A7A"
+                android:pathData="M116,222 H362 V406 H116 Z" />
+            <!-- Screen sunset gradient -->
+            <path android:pathData="M146,246 H336 V382 H146 Z">
+                <aapt:attr name="android:fillColor">
+                    <gradient
+                        android:type="linear"
+                        android:startX="146"
+                        android:startY="246"
+                        android:endX="146"
+                        android:endY="382">
+                        <item android:offset="0.0" android:color="#FFF6B58A" />
+                        <item android:offset="0.55" android:color="#FFE0809A" />
+                        <item android:offset="1.0" android:color="#FF8A6BB5" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <!-- Clipped screen horizon elements -->
+            <group>
+                <clip-path android:pathData="M146,246 H336 V382 H146 Z" />
+                <path
+                    android:fillColor="#F2FDE7C8"
+                    android:pathData="M288,274 A17,17 0 1 0 288,308 A17,17 0 1 0 288,274 Z" />
+                <path
+                    android:fillColor="#8CFDE7C8"
+                    android:pathData="M202,273 H238 A6,6 0 0 1 244,279 A6,6 0 0 1 238,285 H202 A6,6 0 0 1 196,279 A6,6 0 0 1 202,273 Z" />
+                <path
+                    android:fillColor="#FF6A5A9E"
+                    android:pathData="M146,338 Q190,299 236,329 Q282,359 336,317 V382 H146 Z" />
+                <path
+                    android:fillColor="#FF33295C"
+                    android:pathData="M146,360 Q196,331 246,355 Q296,379 336,349 V382 H146 Z" />
+            </group>
+            <!-- Antennas -->
+            <path
+                android:fillColor="#00000000"
+                android:strokeColor="#FF4A5A7A"
+                android:strokeWidth="9"
+                android:strokeLineCap="round"
+                android:pathData="M248,200 L194,102" />
+            <path
+                android:fillColor="#00000000"
+                android:strokeColor="#FF4A5A7A"
+                android:strokeWidth="9"
+                android:strokeLineCap="round"
+                android:pathData="M276,200 L330,102" />
+            <!-- Antenna base -->
+            <path
+                android:fillColor="#FF5F7096"
+                android:pathData="M240,200 A22,6 0 1 0 284,200 A22,6 0 1 0 240,200 Z" />`;
+
+  const icBackgroundXml = `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF0A0E17"
+        android:pathData="M0,0 H108 V108 H0 Z" />
+</vector>
+`;
+
+  const icForegroundXml = `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="21.625"
+        android:translateY="21.625"
+        android:scaleX="0.185"
+        android:scaleY="0.185">
+        <group
+            android:translateX="-90"
+            android:translateY="-78">
+${logoShapesXml}
+        </group>
+    </group>
+</vector>
+`;
+
+  const tvBannerXml = `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:pathData="M0,0 H320 V180 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="320"
+                android:endY="180">
+                <item android:offset="0.0" android:color="#FF090D16" />
+                <item android:offset="1.0" android:color="#FF151C2C" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <group
+        android:translateX="98.05"
+        android:translateY="28.05"
+        android:scaleX="0.354"
+        android:scaleY="0.354">
+        <group
+            android:translateX="-90"
+            android:translateY="-78">
+${logoShapesXml}
+        </group>
+    </group>
+</vector>
+`;
+
+  const adaptiveIconXml = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+`;
+
+  fs.writeFileSync(path.join(drawableDir, 'ic_launcher_background.xml'), icBackgroundXml, 'utf8');
+  fs.writeFileSync(path.join(drawableDir, 'ic_launcher_foreground.xml'), icForegroundXml, 'utf8');
+  fs.writeFileSync(path.join(drawableV24Dir, 'ic_launcher_foreground.xml'), icForegroundXml, 'utf8');
+  fs.writeFileSync(path.join(drawableDir, 'tv_banner.xml'), tvBannerXml, 'utf8');
+  fs.writeFileSync(path.join(mipmapAnyDpiDir, 'ic_launcher.xml'), adaptiveIconXml, 'utf8');
+  fs.writeFileSync(path.join(mipmapAnyDpiDir, 'ic_launcher_round.xml'), adaptiveIconXml, 'utf8');
+  console.log('Generated adaptive launcher icons & 16:9 tv_banner VectorDrawables.');
+}
+

@@ -1,5 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { BluetoothDevice } from '../types/launcher';
+import { BluetoothDevice, TvInputDevice } from '../types/launcher';
 
 interface NativeBluetoothDevicePayload {
   id: string;
@@ -10,9 +10,28 @@ interface NativeBluetoothDevicePayload {
   battery?: number;
 }
 
+interface NativeTvInputPayload {
+  id: string;
+  name: string;
+  detail?: string;
+  type?: 'hdmi' | 'tuner' | 'composite' | 'component' | 'displayport' | 'other';
+  state?: 'connected' | 'standby' | 'disconnected';
+  isPassthrough?: boolean;
+  packageName?: string;
+}
+
 interface TvSystemSettingsPlugin {
   openSystemSettings(): Promise<{ target: string }>;
   openBluetoothSettings(): Promise<{ target: string }>;
+  openTvInputSettings(): Promise<{ target: string }>;
+  getTvInputs(): Promise<{
+    supported: boolean;
+    inputs: NativeTvInputPayload[];
+  }>;
+  switchTvInput(options: { inputId: string }): Promise<{
+    switched: boolean;
+    method: string;
+  }>;
   getBluetoothDevices(): Promise<{
     enabled: boolean;
     permissionRequired?: boolean;
@@ -85,6 +104,88 @@ export async function openAndroidBluetoothSettings(): Promise<SystemSettingsLaun
       target: 'android.settings.BLUETOOTH_SETTINGS',
       reason: 'error',
     };
+  }
+}
+
+export async function openAndroidInputSettings(): Promise<SystemSettingsLaunchResult> {
+  if (!Capacitor.isNativePlatform()) {
+    return {
+      launched: false,
+      target: 'com.android.tv.settings.inputs',
+      reason: 'web-preview',
+    };
+  }
+
+  try {
+    const result = await TvSystemSettings.openTvInputSettings();
+    return {
+      launched: true,
+      target: result?.target || 'com.android.tv.settings',
+    };
+  } catch {
+    return {
+      launched: false,
+      target: 'android.settings.DISPLAY_SETTINGS',
+      reason: 'error',
+    };
+  }
+}
+
+export async function getNativeTvInputs(): Promise<{
+  supported: boolean;
+  inputs: TvInputDevice[];
+} | null> {
+  if (!Capacitor.isNativePlatform()) {
+    return null;
+  }
+
+  try {
+    const res = await TvSystemSettings.getTvInputs();
+    const raw = Array.isArray(res?.inputs) ? res.inputs : [];
+    const inputs: TvInputDevice[] = raw
+      .filter((item) => item && typeof item.id === 'string' && item.id.trim().length > 0)
+      .map((item) => ({
+        id: item.id,
+        name: (item.name || 'TV Input').trim(),
+        detail: (item.detail || '').trim(),
+        type:
+          item.type === 'hdmi' ||
+          item.type === 'tuner' ||
+          item.type === 'composite' ||
+          item.type === 'component' ||
+          item.type === 'displayport'
+            ? item.type
+            : 'other',
+        state:
+          item.state === 'connected' || item.state === 'standby'
+            ? item.state
+            : 'disconnected',
+        isPassthrough: Boolean(item.isPassthrough),
+        packageName: item.packageName,
+      }));
+    return {
+      supported: Boolean(res?.supported),
+      inputs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function switchNativeTvInput(
+  inputId: string
+): Promise<{ switched: boolean; method: string }> {
+  if (!Capacitor.isNativePlatform()) {
+    return { switched: false, method: 'web-preview' };
+  }
+  try {
+    const res = await TvSystemSettings.switchTvInput({ inputId });
+    return {
+      switched: Boolean(res?.switched),
+      method: res?.method || 'unknown',
+    };
+  } catch {
+    return { switched: false, method: 'error' };
   }
 }
 
