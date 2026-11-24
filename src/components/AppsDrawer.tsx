@@ -13,7 +13,6 @@ interface AppsDrawerProps {
   apps: AppItem[];
   focusedIndex: number;
   movingAppId: string | null;
-  editAppsMode?: boolean;
   showClock: boolean;
   timeText: string;
   weather: WeatherState;
@@ -22,7 +21,6 @@ interface AppsDrawerProps {
   onFocusIndex: (index: number) => void;
   onSelectApp: (app: AppItem, index: number) => void;
   onLongPressApp: (app: AppItem) => void;
-  onToggleEditAppsMode?: () => void;
   onDoneMoving: () => void;
   onOpenWeatherDetail: () => void;
   onBackHome: () => void;
@@ -32,7 +30,6 @@ export const AppsDrawer: React.FC<AppsDrawerProps> = ({
   apps,
   focusedIndex,
   movingAppId,
-  editAppsMode = false,
   showClock,
   timeText,
   weather,
@@ -41,7 +38,6 @@ export const AppsDrawer: React.FC<AppsDrawerProps> = ({
   onFocusIndex,
   onSelectApp,
   onLongPressApp,
-  onToggleEditAppsMode,
   onDoneMoving,
   onOpenWeatherDetail,
   onBackHome,
@@ -83,69 +79,24 @@ export const AppsDrawer: React.FC<AppsDrawerProps> = ({
             </div>
           )}
           <p className={`${showClock ? 'mt-1' : ''} text-xs text-white/60`}>
-            {editAppsMode
-              ? 'Edit Mode · Press OK on an app for Move, Info or Uninstall'
-              : 'All Apps · Hold OK to open app options'}
+            All Apps · Hold OK to open app options
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={onBackHome}
-            aria-label="Back to default launcher view"
-            className="flex min-h-[44px] min-w-[64px] items-center justify-center rounded-full border border-white/15 bg-white/8 px-3 text-white/80 hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-          >
-            <ChevronUp size={22} />
-          </button>
-
-          {onToggleEditAppsMode && (
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={onToggleEditAppsMode}
-              className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-full border px-3.5 text-xs font-medium transition-colors ${
-                editAppsMode
-                  ? 'border-white bg-white font-semibold text-[#07080A]'
-                  : 'border-white/15 bg-white/8 text-white/85 hover:bg-white/15'
-              }`}
-            >
-              <ArrowLeftRight size={13} />
-              <span>{editAppsMode ? 'Done Editing' : 'Edit Apps'}</span>
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onBackHome}
+          aria-label="Back to default launcher view"
+          className="flex min-h-[44px] min-w-[64px] items-center justify-center rounded-full border border-white/15 bg-white/8 px-3 text-white/80 hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+        >
+          <ChevronUp size={22} />
+        </button>
 
         <div className="flex justify-end">
           <WeatherWidget weather={weather} onOpenDetail={onOpenWeatherDetail} />
         </div>
       </header>
-
-      {/* Active Edit / Move Mode Banner */}
-      {editAppsMode && !movingApp && (
-        <div className="mx-auto mt-2.5 flex w-full max-w-4xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/25 bg-white/10 px-4 py-2 backdrop-blur-md">
-          <div className="flex items-center gap-2 text-xs text-white/90 sm:text-sm">
-            <ArrowLeftRight size={15} className="shrink-0 text-white" />
-            <span>
-              <strong>Edit Mode:</strong> Press <strong>OK</strong> on any app to
-              Move, view Info, or Uninstall (won’t launch apps). Press{' '}
-              <strong>Back</strong> when finished.
-            </span>
-          </div>
-          {onToggleEditAppsMode && (
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={onToggleEditAppsMode}
-              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl bg-white px-3 text-xs font-semibold text-[#07080A] hover:bg-white/90"
-            >
-              <Check size={13} />
-              <span>Done</span>
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Active Move Mode Banner */}
       {movingApp && (

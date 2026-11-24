@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 const manifestPath = path.resolve(
   process.cwd(),
@@ -1473,5 +1474,382 @@ ${logoShapesXml}
   fs.writeFileSync(path.join(mipmapAnyDpiDir, 'ic_launcher.xml'), adaptiveIconXml, 'utf8');
   fs.writeFileSync(path.join(mipmapAnyDpiDir, 'ic_launcher_round.xml'), adaptiveIconXml, 'utf8');
   console.log('Generated adaptive launcher icons & 16:9 tv_banner VectorDrawables.');
+
+  // Generate crisp anti-aliased raster PNG launcher icons in mipmap-* (used as the APK file icon by Android & file managers)
+  const crcTable = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  };
+
+  const makePngChunk = (type, data) => {
+    const len = data.length;
+    const chunk = Buffer.alloc(12 + len);
+    chunk.writeUInt32BE(len, 0);
+    chunk.write(type, 4, 4, 'ascii');
+    if (len > 0) data.copy(chunk, 8);
+    const crc = crc32(chunk.subarray(4, 8 + len));
+    chunk.writeUInt32BE(crc, 8 + len);
+    return chunk;
+  };
+
+  const encodeRgbaPng = (width, height, rgba) => {
+    const stride = width * 4;
+    const raw = Buffer.alloc((stride + 1) * height);
+    for (let y = 0; y < height; y++) {
+      const rowOffset = y * (stride + 1);
+      raw[rowOffset] = 0;
+      rgba.copy(raw, rowOffset + 1, y * stride, (y + 1) * stride);
+    }
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 6; // RGBA
+    const idat = zlib.deflateSync(raw, { level: 6 });
+    const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    return Buffer.concat([
+      sig,
+      makePngChunk('IHDR', ihdr),
+      makePngChunk('IDAT', idat),
+      makePngChunk('IEND', Buffer.alloc(0)),
+    ]);
+  };
+
+  const buildCurveLookup = (x0, y0, cx1, cy1, x1, y1, cx2, cy2, x2, y2) => {
+    const minX = 146;
+    const maxX = 336;
+    const lut = new Float32Array(maxX - minX + 1);
+    const samples = [];
+    const steps = 160;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const omt = 1 - t;
+      samples.push({
+        x: omt * omt * x0 + 2 * omt * t * cx1 + t * t * x1,
+        y: omt * omt * y0 + 2 * omt * t * cy1 + t * t * y1,
+      });
+    }
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const omt = 1 - t;
+      samples.push({
+        x: omt * omt * x1 + 2 * omt * t * cx2 + t * t * x2,
+        y: omt * omt * y1 + 2 * omt * t * cy2 + t * t * y2,
+      });
+    }
+    let idx = 0;
+    for (let x = minX; x <= maxX; x++) {
+      while (idx + 1 < samples.length && samples[idx + 1].x < x) idx++;
+      const a = samples[idx];
+      const b = samples[Math.min(idx + 1, samples.length - 1)];
+      const span = b.x - a.x;
+      const frac = span > 1e-4 ? Math.max(0, Math.min(1, (x - a.x) / span)) : 0;
+      lut[x - minX] = a.y + (b.y - a.y) * frac;
+    }
+    return lut;
+  };
+
+  const sampleCurveLut = (lut, sx) => {
+    const clamped = Math.max(146, Math.min(336, sx));
+    const lo = Math.floor(clamped) - 146;
+    const hi = Math.min(lut.length - 1, lo + 1);
+    const f = clamped - Math.floor(clamped);
+    return lut[lo] + (lut[hi] - lut[lo]) * f;
+  };
+
+  const backHillLut = buildCurveLookup(146, 338, 190, 299, 236, 329, 282, 359, 336, 317);
+  const frontHillLut = buildCurveLookup(146, 360, 196, 331, 246, 355, 296, 379, 336, 349);
+
+  const pointInConvexQuad = (px, py, pts) => {
+    let pos = 0;
+    let neg = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % 4];
+      const cross = (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0]);
+      if (cross >= 0) pos++;
+      if (cross <= 0) neg++;
+    }
+    return pos === 4 || neg === 4;
+  };
+
+  const distToSegmentSq = (px, py, x1, y1, x2, y2) => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq > 0 ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq)) : 0;
+    const nx = x1 + t * dx;
+    const ny = y1 + t * dy;
+    return (px - nx) * (px - nx) + (py - ny) * (py - ny);
+  };
+
+  const tvTopQuad = [[116, 222], [170, 190], [414, 190], [362, 222]];
+  const tvSideQuad = [[362, 222], [414, 190], [414, 366], [362, 406]];
+
+  const sampleSvgLogo = (sx, sy) => {
+    // Antenna base ellipse
+    const ex = (sx - 262) / 22;
+    const ey = (sy - 200) / 6;
+    if (ex * ex + ey * ey <= 1) return [95, 112, 150, 255];
+
+    // Antennas (stroke-width 9 => radius 4.5)
+    if (
+      distToSegmentSq(sx, sy, 248, 200, 194, 102) <= 20.25 ||
+      distToSegmentSq(sx, sy, 276, 200, 330, 102) <= 20.25
+    ) {
+      return [74, 90, 122, 255];
+    }
+
+    // Screen area
+    if (sx >= 146 && sx <= 336 && sy >= 246 && sy <= 382) {
+      const t = (sy - 246) / 136;
+      let r;
+      let g;
+      let b;
+      if (t <= 0.55) {
+        const k = t / 0.55;
+        r = 246 + (224 - 246) * k;
+        g = 181 + (128 - 181) * k;
+        b = 138 + (154 - 138) * k;
+      } else {
+        const k = (t - 0.55) / 0.45;
+        r = 224 + (138 - 224) * k;
+        g = 128 + (107 - 128) * k;
+        b = 154 + (181 - 154) * k;
+      }
+      // Sun circle (288, 291, r=17) alpha 0.95
+      const sdx = sx - 288;
+      const sdy = sy - 291;
+      if (sdx * sdx + sdy * sdy <= 289) {
+        r = r * 0.05 + 253 * 0.95;
+        g = g * 0.05 + 231 * 0.95;
+        b = b * 0.05 + 200 * 0.95;
+      }
+      // Cloud rounded pill (196..244, 273..285, rx=6) alpha 0.55
+      if (sx >= 196 && sx <= 244 && sy >= 273 && sy <= 285) {
+        const cx = sx < 202 ? 202 : sx > 238 ? 238 : sx;
+        const cy = 279;
+        if ((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy) <= 36) {
+          r = r * 0.45 + 253 * 0.55;
+          g = g * 0.45 + 231 * 0.55;
+          b = b * 0.45 + 200 * 0.55;
+        }
+      }
+      if (sy >= sampleCurveLut(frontHillLut, sx)) {
+        return [51, 41, 92, 255];
+      }
+      if (sy >= sampleCurveLut(backHillLut, sx)) {
+        return [106, 90, 158, 255];
+      }
+      return [Math.round(r), Math.round(g), Math.round(b), 255];
+    }
+
+    // TV front face
+    if (sx >= 116 && sx <= 362 && sy >= 222 && sy <= 406) {
+      return [74, 90, 122, 255];
+    }
+    // TV top face
+    if (pointInConvexQuad(sx, sy, tvTopQuad)) {
+      return [138, 156, 194, 255];
+    }
+    // TV side face
+    if (pointInConvexQuad(sx, sy, tvSideQuad)) {
+      return [52, 65, 92, 255];
+    }
+    return null;
+  };
+
+  const renderAmbientTvIconPng = (size, mode) => {
+    const rgba = Buffer.alloc(size * size * 4);
+    const subGrid = 3;
+    const invSub = 1 / (subGrid * subGrid);
+    const logoRatio = mode === 'foreground' ? 0.58 : mode === 'round' ? 0.72 : 0.76;
+    const svgSize = 350;
+    const logoPixelSpan = size * logoRatio;
+    const logoOffset = (size - logoPixelSpan) / 2;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let sumA = 0;
+
+        for (let syi = 0; syi < subGrid; syi++) {
+          const py = y + (syi + 0.5) / subGrid;
+          for (let sxi = 0; sxi < subGrid; sxi++) {
+            const px = x + (sxi + 0.5) / subGrid;
+
+            let bgAlpha = 0;
+            if (mode === 'square') {
+              const margin = size * 0.04;
+              const radius = size * 0.21;
+              const innerMin = margin + radius;
+              const innerMax = size - margin - radius;
+              if (px >= margin && px <= size - margin && py >= margin && py <= size - margin) {
+                const cx = px < innerMin ? innerMin : px > innerMax ? innerMax : px;
+                const cy = py < innerMin ? innerMin : py > innerMax ? innerMax : py;
+                if ((px - cx) * (px - cx) + (py - cy) * (py - cy) <= radius * radius) {
+                  bgAlpha = 1;
+                }
+              }
+            } else if (mode === 'round') {
+              const half = size * 0.5;
+              const rMax = size * 0.46;
+              const dx = px - half;
+              const dy = py - half;
+              if (dx * dx + dy * dy <= rMax * rMax) {
+                bgAlpha = 1;
+              }
+            }
+
+            const sx = 90 + ((px - logoOffset) / logoPixelSpan) * svgSize;
+            const sy = 78 + ((py - logoOffset) / logoPixelSpan) * svgSize;
+            const fg = sx >= 85 && sx <= 445 && sy >= 75 && sy <= 430 ? sampleSvgLogo(sx, sy) : null;
+
+            if (fg) {
+              sumR += fg[0];
+              sumG += fg[1];
+              sumB += fg[2];
+              sumA += 255;
+            } else if (bgAlpha > 0) {
+              sumR += 10;
+              sumG += 14;
+              sumB += 23;
+              sumA += 255;
+            }
+          }
+        }
+
+        const outIdx = (y * size + x) * 4;
+        const alpha = Math.round(sumA * invSub);
+        if (alpha > 0) {
+          rgba[outIdx] = Math.round(sumR / (sumA / 255 || 1));
+          rgba[outIdx + 1] = Math.round(sumG / (sumA / 255 || 1));
+          rgba[outIdx + 2] = Math.round(sumB / (sumA / 255 || 1));
+          rgba[outIdx + 3] = alpha;
+        }
+      }
+    }
+    return encodeRgbaPng(size, size, rgba);
+  };
+
+  const mipmapDensities = [
+    { dir: 'mipmap-mdpi', iconSize: 48, fgSize: 108 },
+    { dir: 'mipmap-hdpi', iconSize: 72, fgSize: 162 },
+    { dir: 'mipmap-xhdpi', iconSize: 96, fgSize: 216 },
+    { dir: 'mipmap-xxhdpi', iconSize: 144, fgSize: 324 },
+    { dir: 'mipmap-xxxhdpi', iconSize: 192, fgSize: 432 },
+  ];
+
+  for (const density of mipmapDensities) {
+    const mipDir = path.join(resDir, density.dir);
+    fs.mkdirSync(mipDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mipDir, 'ic_launcher.png'),
+      renderAmbientTvIconPng(density.iconSize, 'square')
+    );
+    fs.writeFileSync(
+      path.join(mipDir, 'ic_launcher_round.png'),
+      renderAmbientTvIconPng(density.iconSize, 'round')
+    );
+    fs.writeFileSync(
+      path.join(mipDir, 'ic_launcher_foreground.png'),
+      renderAmbientTvIconPng(density.fgSize, 'foreground')
+    );
+  }
+  console.log('Generated mipmap-* raster PNG launcher icons for APK & legacy launchers.');
+
+  // Replace default Capacitor splash.png bitmaps with custom dark Ambient TV logo splash screen
+  const splashPngDirs = [
+    'drawable',
+    'drawable-land-mdpi',
+    'drawable-land-hdpi',
+    'drawable-land-xhdpi',
+    'drawable-land-xxhdpi',
+    'drawable-land-xxxhdpi',
+    'drawable-port-mdpi',
+    'drawable-port-hdpi',
+    'drawable-port-xhdpi',
+    'drawable-port-xxhdpi',
+    'drawable-port-xxxhdpi',
+  ];
+  for (const dirName of splashPngDirs) {
+    const legacySplash = path.join(resDir, dirName, 'splash.png');
+    if (fs.existsSync(legacySplash)) {
+      fs.unlinkSync(legacySplash);
+    }
+  }
+
+  const splashLogoXml = `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="148dp"
+    android:height="148dp"
+    android:viewportWidth="350"
+    android:viewportHeight="350">
+    <group
+        android:translateX="-90"
+        android:translateY="-78">
+${logoShapesXml}
+    </group>
+</vector>
+`;
+
+  const splashLayerXml = `<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#FF07080A" />
+        </shape>
+    </item>
+    <item
+        android:width="148dp"
+        android:height="148dp"
+        android:gravity="center"
+        android:drawable="@drawable/splash_logo" />
+</layer-list>
+`;
+
+  fs.writeFileSync(path.join(drawableDir, 'splash_logo.xml'), splashLogoXml, 'utf8');
+  fs.writeFileSync(path.join(drawableDir, 'splash.xml'), splashLayerXml, 'utf8');
+
+  const stylesPath = path.join(resDir, 'values', 'styles.xml');
+  if (fs.existsSync(stylesPath)) {
+    let stylesXml = fs.readFileSync(stylesPath, 'utf8');
+    const launchStyleBlock = `    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="android:windowBackground">@drawable/splash</item>
+        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">#07080A</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+    </style>`;
+
+    if (/<style\s+name="AppTheme\.NoActionBarLaunch"[\s\S]*?<\/style>/.test(stylesXml)) {
+      stylesXml = stylesXml.replace(
+        /<style\s+name="AppTheme\.NoActionBarLaunch"[\s\S]*?<\/style>/,
+        launchStyleBlock.trimStart()
+      );
+    } else if (stylesXml.includes('</resources>')) {
+      stylesXml = stylesXml.replace('</resources>', `${launchStyleBlock}\n</resources>`);
+    }
+    fs.writeFileSync(stylesPath, stylesXml, 'utf8');
+  }
+  console.log('Configured custom Ambient TV icon launch splash screen.');
 }
 

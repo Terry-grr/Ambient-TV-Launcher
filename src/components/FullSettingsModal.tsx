@@ -513,8 +513,8 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 </div>
                 <p className="mt-1 text-xs text-white/65">
                   The first 5 apps in your Apps Drawer automatically appear on the
-                  Default Home screen. Hold OK on any app or use Edit Mode below
-                  to move, inspect, or uninstall apps without launching them.
+                  Default Home screen. Hold OK on any app to move, inspect, or
+                  uninstall it.
                 </p>
                 {isNativeAndroid && nativeAppsError && (
                   <div className="mt-2.5 rounded-xl border border-amber-400/35 bg-amber-500/12 px-3 py-2 text-xs text-amber-200">
@@ -532,7 +532,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                     onClick={onOpenAppsEditMode}
                     className="inline-flex min-h-[38px] items-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
                   >
-                    <span>Manage / Reorder Apps (Edit Mode)</span>
+                    <span>Open Apps Drawer</span>
                   </button>
 
                   {isNativeAndroid ? (

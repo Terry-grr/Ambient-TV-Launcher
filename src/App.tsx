@@ -325,7 +325,6 @@ export default function App() {
   const [weatherActivateSignal, setWeatherActivateSignal] = useState<number>(0);
   const [ambientRevealSignal, setAmbientRevealSignal] = useState<number>(0);
   const [movingAppId, setMovingAppId] = useState<string | null>(null);
-  const [editAppsMode, setEditAppsMode] = useState<boolean>(false);
   const [btPermissionRequired, setBtPermissionRequired] = useState<boolean>(false);
   const [btLoading, setBtLoading] = useState<boolean>(false);
   const btRefreshInFlightRef = useRef(false);
@@ -1356,7 +1355,7 @@ export default function App() {
         } else if (dir === 'down') {
           nextIndex = Math.min(apps.length - 1, drawerFocusIndex + cols);
         } else if (dir === 'up') {
-          if (drawerFocusIndex < cols && !movingAppId && !editAppsMode) {
+          if (drawerFocusIndex < cols && !movingAppId) {
             setHomeFocusIndex(Math.min(drawerFocusIndex, pinnedApps.length - 1));
             setScreen('default');
             return;
@@ -1379,7 +1378,6 @@ export default function App() {
       drawerFocusIndex,
       apps.length,
       movingAppId,
-      editAppsMode,
       weather.hourly24Hours.length,
       weather.daily7Days.length,
       weatherFocus,
@@ -1438,11 +1436,7 @@ export default function App() {
       } else {
         const app = apps[drawerFocusIndex];
         if (app) {
-          if (editAppsMode) {
-            openAppActionModal(app.id, 'drawer', false);
-          } else {
-            handleLaunchApp(app);
-          }
+          handleLaunchApp(app);
         }
       }
     } else if (screen === 'quick-settings') {
@@ -1456,10 +1450,8 @@ export default function App() {
     apps,
     drawerFocusIndex,
     movingAppId,
-    editAppsMode,
     weatherFocus.section,
     handleLaunchApp,
-    openAppActionModal,
   ]);
 
   const handleOkLongPress = useCallback(() => {
@@ -1492,10 +1484,6 @@ export default function App() {
       setMovingAppId(null);
       return;
     }
-    if (screen === 'apps-drawer' && editAppsMode) {
-      setEditAppsMode(false);
-      return;
-    }
     if (screen === 'weather') {
       const subEvent = new CustomEvent('tv-weather-subback', { cancelable: true });
       if (!window.dispatchEvent(subEvent)) {
@@ -1503,10 +1491,9 @@ export default function App() {
       }
     }
     if (screen !== 'default') {
-      setEditAppsMode(false);
       setScreen('default');
     }
-  }, [modal, movingAppId, screen, editAppsMode]);
+  }, [modal, movingAppId, screen]);
 
   // Keyboard D-pad & Android TV Hardware Back / OK long-press listener
   const enterHoldTimerRef = useRef<number | null>(null);
@@ -1965,7 +1952,6 @@ export default function App() {
             apps={apps}
             focusedIndex={drawerFocusIndex}
             movingAppId={movingAppId}
-            editAppsMode={editAppsMode}
             showClock={settings.showClock}
             timeText={timeText}
             weather={weather}
@@ -1979,27 +1965,19 @@ export default function App() {
                 } else {
                   handleSwapOrMoveApp(idx);
                 }
-              } else if (editAppsMode) {
-                openAppActionModal(app.id, 'drawer', false);
               } else {
                 handleLaunchApp(app);
               }
             }}
             onLongPressApp={(app) => openAppActionModal(app.id, 'drawer', true)}
-            onToggleEditAppsMode={() => {
-              setMovingAppId(null);
-              setEditAppsMode((v) => !v);
-            }}
             onDoneMoving={() => setMovingAppId(null)}
             onOpenWeatherDetail={() => {
               setMovingAppId(null);
-              setEditAppsMode(false);
               setWeatherFocus({ section: 'hourly', index: 0 });
               setScreen('weather');
             }}
             onBackHome={() => {
               setMovingAppId(null);
-              setEditAppsMode(false);
               setScreen('default');
             }}
           />
@@ -2090,7 +2068,6 @@ export default function App() {
         onHome={() => {
           setModal(null);
           setMovingAppId(null);
-          setEditAppsMode(false);
           setScreen('default');
         }}
         onHide={() => setSettings((s) => ({ ...s, showTouchRemote: false }))}
@@ -2291,7 +2268,6 @@ export default function App() {
           onOpenAppsEditMode={() => {
             setModal(null);
             setMovingAppId(null);
-            setEditAppsMode(true);
             setScreen('apps-drawer');
           }}
           onRestoreDefaultApps={() => {
