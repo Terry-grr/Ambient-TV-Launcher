@@ -77,6 +77,8 @@ export interface WeatherHourSlice {
   windDirectionDeg?: number;
   isBadWeather: boolean;
   isSevereWarning?: boolean;
+  warningColour?: 'Red' | 'Orange' | 'Yellow';
+  warningHeadline?: string;
 }
 
 export interface WeatherDaySlice {
@@ -98,6 +100,8 @@ export interface WeatherDaySlice {
   sunsetIso?: string;
   isBadWeather: boolean;
   isSevereWarning: boolean;
+  warningColour?: 'Red' | 'Orange' | 'Yellow';
+  warningHeadline?: string;
 }
 
 export interface ManualCityOption {
@@ -106,6 +110,22 @@ export interface ManualCityOption {
   country: string;
   latitude: number;
   longitude: number;
+}
+
+export interface WeatherAlertItem {
+  id: string;
+  source: 'metservice' | 'nws' | 'meteoalarm' | 'bom' | 'canada' | 'custom' | 'forecast';
+  event: string;
+  headline: string;
+  severity: 'Extreme' | 'Severe' | 'Moderate' | 'Minor' | 'Unknown';
+  colourLevel?: 'Red' | 'Orange' | 'Yellow';
+  areaDesc?: string;
+  description?: string;
+  instruction?: string;
+  onsetIso?: string;
+  expiresIso?: string;
+  nextUpdateIso?: string;
+  webUrl?: string;
 }
 
 export interface WeatherState {
@@ -126,6 +146,7 @@ export interface WeatherState {
   nextFourHours: WeatherHourSlice[];
   hourly24Hours: WeatherHourSlice[];
   daily7Days: WeatherDaySlice[];
+  activeAlerts: WeatherAlertItem[];
   hasWarning: boolean;
   warningHeadline: string | null;
   extendedWarningHeadline: string | null;
@@ -169,6 +190,7 @@ export interface LauncherSettings {
   bluetoothEnabled: boolean;
   bluetoothDevices: BluetoothDevice[];
   showTouchRemote: boolean;
+  customCapFeedUrl?: string;
 }
 
 export type ModalOverlay =

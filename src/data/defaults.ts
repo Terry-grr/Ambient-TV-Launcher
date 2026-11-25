@@ -552,6 +552,7 @@ export const DEFAULT_SETTINGS: LauncherSettings = {
     { id: 'bt-controller', name: 'DualSense Wireless', type: 'gamepad', connected: false, battery: 62 },
   ],
   showTouchRemote: false,
+  customCapFeedUrl: '',
 };
 
 export const DEFAULT_TV_INPUTS: TvInputDevice[] = [

@@ -36,6 +36,12 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({
 }) => {
   if (!weather.enabled) return null;
 
+  const primaryAlert = weather.activeAlerts[0];
+  const isRedWarning =
+    weather.hasWarning &&
+    (primaryAlert?.colourLevel === 'Red' || primaryAlert?.severity === 'Extreme');
+  const warningTextColor = isRedWarning ? 'text-red-300' : 'text-amber-300';
+
   return (
     <button
       type="button"
@@ -55,7 +61,7 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({
             {renderWeatherIcon(
               weather.current.weatherCode,
               21,
-              weather.hasWarning ? 'text-amber-300' : 'text-white/90'
+              weather.hasWarning ? warningTextColor : 'text-white/90'
             )}
             <span className="font-display text-xl font-normal tracking-tight text-white tabular-nums sm:text-3xl">
               {weather.current.tempC}°C
@@ -72,7 +78,9 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({
 
           {weather.warningHeadline &&
             (weather.hasWarning ? (
-              <div className="mt-0.5 flex items-center justify-end gap-1 text-xs font-medium text-amber-300">
+              <div
+                className={`mt-0.5 flex items-center justify-end gap-1 text-xs font-medium ${warningTextColor}`}
+              >
                 <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
                 <span>Warning · {weather.warningHeadline}</span>
               </div>

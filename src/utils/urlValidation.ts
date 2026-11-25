@@ -47,3 +47,30 @@ export function parseGithubRepoSlug(raw: string): string | null {
   }
   return normalized;
 }
+
+export function normalizeSafeHttpsFeedUrl(raw: string): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 1024) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (parsed.port && parsed.port !== '443') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'localhost' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      host.endsWith('.localhost') ||
+      /^\d+\.\d+\.\d+\.\d+$/.test(host) ||
+      host.includes(':')
+    ) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}

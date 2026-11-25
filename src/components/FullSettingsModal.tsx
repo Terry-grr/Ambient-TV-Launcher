@@ -24,7 +24,12 @@ import {
   WeatherTag,
 } from '../types/launcher';
 import { getEffectiveWeatherTags } from '../services/wallpaperCatalogService';
-import { isSafeHttpsUrl, parseGithubRepoSlug } from '../utils/urlValidation';
+import { testCustomCapFeed } from '../services/weatherService';
+import {
+  isSafeHttpsUrl,
+  normalizeSafeHttpsFeedUrl,
+  parseGithubRepoSlug,
+} from '../utils/urlValidation';
 
 interface FullSettingsModalProps {
   initialTab: 'general' | 'weather' | 'albums' | 'apps' | 'github';
@@ -95,6 +100,12 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [latestRelease, setLatestRelease] = useState<GithubReleaseInfo | null>(null);
+  const [capFeedInput, setCapFeedInput] = useState(settings.customCapFeedUrl || '');
+  const [capTesting, setCapTesting] = useState(false);
+  const [capFeedback, setCapFeedback] = useState<{
+    type: 'ok' | 'error';
+    message: string;
+  } | null>(null);
 
   const tabs = [
     { id: 'general', label: 'Display', icon: Sliders },
@@ -190,10 +201,10 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
             />
             <div className="min-w-0 flex-1">
               <h2 className="font-display truncate text-base font-semibold text-white sm:text-lg">
-                Main Settings
+                Launcher Settings
               </h2>
               <p className="mt-0.5 truncate text-xs text-white/60">
-                Launcher display, weather, background albums & GitHub updates
+                Display, weather, background albums & GitHub updates
               </p>
             </div>
           </div>
@@ -201,7 +212,7 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
             type="button"
             data-dialog-close="true"
             onClick={onClose}
-            aria-label="Close Main Settings"
+            aria-label="Close Launcher Settings"
             className="flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-xl text-white/75 hover:bg-white/10 hover:text-white"
           >
             <X size={18} />
@@ -428,6 +439,102 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                 >
                   Configure GPS / Manual City & View 4h Forecast
                 </button>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                <div className="text-sm font-medium text-white">
+                  Regional CAP Warning Feed (Optional)
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-white/65">
+                  New Zealand (MetService), US (NWS), Australia (BOM), Canada (Alert Ready), and
+                  Europe (MeteoAlarm) are built in. For any other country or regional feed, paste an{' '}
+                  <span className="text-white/85">https://</span> CAP RSS or Atom URL from WMO SWIC (
+                  <span className="text-white/85">severeweather.wmo.int</span>) or your national
+                  meteorological service.
+                </p>
+
+                <div className="mt-2.5 flex flex-wrap gap-2 sm:flex-nowrap">
+                  <input
+                    type="url"
+                    value={capFeedInput}
+                    onChange={(e) => {
+                      setCapFeedInput(e.target.value);
+                      setCapFeedback(null);
+                    }}
+                    placeholder="https://severeweather.wmo.int/v2/cap-alerts/.../rss.xml"
+                    aria-label="Custom CAP warning RSS or Atom feed URL"
+                    className="min-h-[40px] min-w-0 flex-1 rounded-xl border border-white/15 bg-black/50 px-3 text-xs text-white placeholder-white/40 focus:border-white focus:outline-none sm:text-sm"
+                  />
+                  <button
+                    type="button"
+                    disabled={capTesting}
+                    onClick={async () => {
+                      const trimmed = capFeedInput.trim();
+                      if (!trimmed) {
+                        onUpdateSettings({ customCapFeedUrl: '' });
+                        setCapFeedback({
+                          type: 'ok',
+                          message: 'Cleared custom feed; using built-in regional alerts.',
+                        });
+                        return;
+                      }
+                      const normalized = normalizeSafeHttpsFeedUrl(trimmed);
+                      if (!normalized) {
+                        setCapFeedback({
+                          type: 'error',
+                          message: 'Enter a valid public https:// RSS, Atom, or CAP XML URL.',
+                        });
+                        return;
+                      }
+                      setCapTesting(true);
+                      setCapFeedback(null);
+                      const result = await testCustomCapFeed(normalized);
+                      setCapTesting(false);
+                      if (!result.ok) {
+                        setCapFeedback({
+                          type: 'error',
+                          message: result.error || 'Could not verify custom CAP feed.',
+                        });
+                        return;
+                      }
+                      setCapFeedInput(normalized);
+                      onUpdateSettings({ customCapFeedUrl: normalized });
+                      setCapFeedback({
+                        type: 'ok',
+                        message: `Saved ${result.title || 'CAP feed'} (${result.entryCount} active feed entries).`,
+                      });
+                    }}
+                    className="min-h-[40px] shrink-0 whitespace-nowrap rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90 disabled:opacity-60"
+                  >
+                    {capTesting ? 'Verifying…' : 'Save Feed'}
+                  </button>
+                  {(settings.customCapFeedUrl || capFeedInput.trim()) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCapFeedInput('');
+                        onUpdateSettings({ customCapFeedUrl: '' });
+                        setCapFeedback({
+                          type: 'ok',
+                          message: 'Cleared custom feed; using built-in regional alerts.',
+                        });
+                      }}
+                      className="min-h-[40px] shrink-0 whitespace-nowrap rounded-xl border border-white/15 bg-white/8 px-3.5 text-xs font-medium text-white hover:bg-white/15"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {capFeedback && (
+                  <p
+                    className={`mt-2 text-xs ${
+                      capFeedback.type === 'ok' ? 'text-emerald-300' : 'text-amber-300'
+                    }`}
+                  >
+                    {capFeedback.message}
+                  </p>
+                )}
               </div>
             </div>
           )}

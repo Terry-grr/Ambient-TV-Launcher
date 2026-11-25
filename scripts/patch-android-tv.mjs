@@ -50,6 +50,7 @@ for (const feature of tvFeatures) {
 // Package visibility queries for Android 11+ (Leanback & Standard launchers + Settings + Bluetooth + Live TV / Inputs)
 const queriesBlock = `    <queries>
         <package android:name="com.android.tv.settings" />
+        <package android:name="com.android.settings" />
         <package android:name="com.google.android.tv" />
         <package android:name="com.android.tv" />
         <intent>
@@ -286,10 +287,73 @@ public class TvSystemSettingsPlugin extends Plugin {
         return "android.settings.SETTINGS";
     }
 
+    private String launchTopLevelSystemSettings() {
+        PackageManager pm = getContext().getPackageManager();
+        int topLevelFlags = Intent.FLAG_ACTIVITY_NEW_TASK
+            | Intent.FLAG_ACTIVITY_CLEAR_TASK
+            | Intent.FLAG_ACTIVITY_CLEAR_TOP
+            | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED;
+
+        // 1. Explicit Android TV / Google TV root settings activity
+        String[][] tvRoots = new String[][] {
+            new String[] { "com.android.tv.settings", "com.android.tv.settings.MainSettings" },
+            new String[] { "com.android.settings", "com.android.settings.Settings" },
+        };
+        for (String[] root : tvRoots) {
+            try {
+                Intent rootIntent = new Intent(Intent.ACTION_MAIN);
+                rootIntent.setComponent(new ComponentName(root[0], root[1]));
+                rootIntent.addFlags(topLevelFlags);
+                if (rootIntent.resolveActivity(pm) != null) {
+                    getContext().startActivity(rootIntent);
+                    return root[0];
+                }
+            } catch (Throwable ignored) {
+                // Try next root activity
+            }
+        }
+
+        // 2. Package Leanback/standard launch intent for Android TV Settings
+        String[] settingsPackages = new String[] { "com.android.tv.settings", "com.android.settings" };
+        for (String pkg : settingsPackages) {
+            try {
+                Intent pkgIntent = pm.getLeanbackLaunchIntentForPackage(pkg);
+                if (pkgIntent == null) {
+                    pkgIntent = pm.getLaunchIntentForPackage(pkg);
+                }
+                if (pkgIntent != null) {
+                    pkgIntent.addFlags(topLevelFlags);
+                    getContext().startActivity(pkgIntent);
+                    return pkg;
+                }
+            } catch (Throwable ignored) {
+                // Try next package
+            }
+        }
+
+        // 3. Settings.ACTION_SETTINGS scoped to com.android.tv.settings, then generic
+        try {
+            Intent tvActionIntent = new Intent(Settings.ACTION_SETTINGS);
+            tvActionIntent.setPackage("com.android.tv.settings");
+            tvActionIntent.addFlags(topLevelFlags);
+            if (tvActionIntent.resolveActivity(pm) != null) {
+                getContext().startActivity(tvActionIntent);
+                return "com.android.tv.settings";
+            }
+        } catch (Throwable ignored) {
+            // Fall through to generic Settings
+        }
+
+        Intent fallbackIntent = new Intent(Settings.ACTION_SETTINGS);
+        fallbackIntent.addFlags(topLevelFlags);
+        getContext().startActivity(fallbackIntent);
+        return "android.settings.SETTINGS";
+    }
+
     @PluginMethod
     public void openSystemSettings(PluginCall call) {
         try {
-            String target = launchSettingsAction(Settings.ACTION_SETTINGS);
+            String target = launchTopLevelSystemSettings();
             JSObject result = new JSObject();
             result.put("target", target);
             call.resolve(result);

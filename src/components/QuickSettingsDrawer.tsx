@@ -302,8 +302,8 @@ export const QuickSettingsDrawer = forwardRef<
     const rows = [
       {
         id: 'qs-main',
-        label: 'Main Settings',
-        sub: 'System, clock, albums & updates',
+        label: 'Launcher Settings',
+        sub: 'Clock, weather, albums & updates',
         icon: Settings,
         action: () => onOpenFullSettings('general'),
       },

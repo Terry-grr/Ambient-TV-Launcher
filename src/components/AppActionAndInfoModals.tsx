@@ -84,7 +84,7 @@ export const AppActionModal: React.FC<AppActionModalProps> = ({
           <div className="pt-4">
             <p className="text-sm text-white/85">
               Uninstall <strong>{app.name}</strong> from the launcher? You can
-              restore default apps anytime in Full Settings.
+              restore default apps anytime in Launcher Settings.
             </p>
             <div className="mt-4 flex gap-2.5">
               <button

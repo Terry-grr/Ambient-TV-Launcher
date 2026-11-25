@@ -65,6 +65,7 @@ import {
 } from './services/nativeApps';
 import {
   isSafeHttpUrl,
+  normalizeSafeHttpsFeedUrl,
   parseGithubRepoSlug,
   sanitizeWallpaperImageUrl,
 } from './utils/urlValidation';
@@ -371,6 +372,11 @@ export default function App() {
         parseGithubRepoSlug(stored.publicReleaseRepo)
           ? parseGithubRepoSlug(stored.publicReleaseRepo)!
           : DEFAULT_SETTINGS.publicReleaseRepo,
+      customCapFeedUrl:
+        typeof stored.customCapFeedUrl === 'string' &&
+        normalizeSafeHttpsFeedUrl(stored.customCapFeedUrl)
+          ? normalizeSafeHttpsFeedUrl(stored.customCapFeedUrl)!
+          : '',
     };
   });
 
@@ -636,6 +642,7 @@ export default function App() {
       nextFourHours: [],
       hourly24Hours: [],
       daily7Days: [],
+      activeAlerts: [],
       hasWarning: false,
       warningHeadline: null,
       extendedWarningHeadline: null,
@@ -661,6 +668,8 @@ export default function App() {
       let lat = manualCity.latitude;
       let lon = manualCity.longitude;
       let label = manualCity.name;
+      let regionHint = mode === 'manual' ? manualCity.region : undefined;
+      let countryHint = mode === 'manual' ? manualCity.country : undefined;
       let fallbackUsed = false;
 
       if (mode === 'gps') {
@@ -669,13 +678,21 @@ export default function App() {
           lat = loc.latitude;
           lon = loc.longitude;
           label = loc.city;
+          regionHint = undefined;
+          countryHint = undefined;
         } catch {
           fallbackUsed = true;
+          regionHint = manualCity.region;
+          countryHint = manualCity.country;
         }
       }
 
       try {
-        const forecast = await fetchFourHourForecast(lat, lon);
+        const forecast = await fetchFourHourForecast(lat, lon, label, {
+          regionHint,
+          countryHint,
+          customCapFeedUrl: settings.customCapFeedUrl,
+        });
         setWeather((prev) => ({
           ...prev,
           loading: false,
@@ -686,6 +703,7 @@ export default function App() {
           nextFourHours: forecast.nextFourHours,
           hourly24Hours: forecast.hourly24Hours,
           daily7Days: forecast.daily7Days,
+          activeAlerts: forecast.activeAlerts,
           hasWarning: forecast.hasWarning,
           warningHeadline: forecast.warningHeadline,
           extendedWarningHeadline: forecast.extendedWarningHeadline,
@@ -702,7 +720,7 @@ export default function App() {
         }));
       }
     },
-    []
+    [settings.customCapFeedUrl]
   );
 
   useEffect(() => {
@@ -715,6 +733,7 @@ export default function App() {
   }, [
     weather.enabled,
     settings.syncBackgroundToWeather,
+    settings.customCapFeedUrl,
     weather.locationMode,
     weather.manualCity,
     refreshWeather,
@@ -1165,7 +1184,10 @@ export default function App() {
           if (homeFocusIndex < pinnedApps.length - 1) {
             setHomeFocusIndex((i) => i + 1);
           } else {
-            setWeatherFocus({ section: 'hourly', index: 0 });
+            setWeatherFocus({
+              section: weather.activeAlerts.length > 0 ? 'alert' : 'hourly',
+              index: 0,
+            });
             setScreen('weather');
           }
         } else if (dir === 'up') {
@@ -1235,6 +1257,7 @@ export default function App() {
 
         const hourMax = Math.max(0, weather.hourly24Hours.length - 1);
         const dayMax = Math.max(0, weather.daily7Days.length - 1);
+        const hasAlerts = weather.activeAlerts.length > 0;
 
         if (weatherFocus.section === 'header') {
           if (dir === 'left') {
@@ -1244,6 +1267,17 @@ export default function App() {
               setScreen('default');
             }
           } else if (dir === 'right') {
+            setWeatherFocus({ section: 'header', index: 1 });
+          } else if (dir === 'down') {
+            setWeatherFocus({ section: hasAlerts ? 'alert' : 'hourly', index: 0 });
+          }
+          return;
+        }
+
+        if (weatherFocus.section === 'alert') {
+          if (dir === 'left') {
+            setScreen('default');
+          } else if (dir === 'up') {
             setWeatherFocus({ section: 'header', index: 1 });
           } else if (dir === 'down') {
             setWeatherFocus({ section: 'hourly', index: 0 });
@@ -1264,7 +1298,9 @@ export default function App() {
               index: Math.min(hourMax, f.index + 1),
             }));
           } else if (dir === 'up') {
-            setWeatherFocus({ section: 'header', index: 1 });
+            setWeatherFocus(
+              hasAlerts ? { section: 'alert', index: 0 } : { section: 'header', index: 1 }
+            );
           } else if (dir === 'down') {
             setWeatherFocus({
               section: 'daily',
@@ -1380,6 +1416,7 @@ export default function App() {
       movingAppId,
       weather.hourly24Hours.length,
       weather.daily7Days.length,
+      weather.activeAlerts.length,
       weatherFocus,
       handleSwapOrMoveApp,
       handleNextWallpaper,
@@ -1424,6 +1461,7 @@ export default function App() {
       }
       if (
         weatherFocus.section === 'header' ||
+        weatherFocus.section === 'alert' ||
         weatherFocus.section === 'hourly' ||
         weatherFocus.section === 'daily' ||
         weatherFocus.section === 'controls'
@@ -1755,7 +1793,10 @@ export default function App() {
         setQsFocusIndex(0);
         setScreen('quick-settings');
       } else if (dx < -60 && screen === 'default') {
-        setWeatherFocus({ section: 'hourly', index: 0 });
+        setWeatherFocus({
+          section: weather.activeAlerts.length > 0 ? 'alert' : 'hourly',
+          index: 0,
+        });
         setScreen('weather');
       } else if (dx < -60 && screen === 'quick-settings') {
         setScreen('default');
@@ -1851,7 +1892,10 @@ export default function App() {
             <WeatherWidget
               weather={weather}
               onOpenDetail={() => {
-                setWeatherFocus({ section: 'hourly', index: 0 });
+                setWeatherFocus({
+                  section: weather.activeAlerts.length > 0 ? 'alert' : 'hourly',
+                  index: 0,
+                });
                 setScreen('weather');
               }}
             />
@@ -1973,7 +2017,10 @@ export default function App() {
             onDoneMoving={() => setMovingAppId(null)}
             onOpenWeatherDetail={() => {
               setMovingAppId(null);
-              setWeatherFocus({ section: 'hourly', index: 0 });
+              setWeatherFocus({
+                section: weather.activeAlerts.length > 0 ? 'alert' : 'hourly',
+                index: 0,
+              });
               setScreen('weather');
             }}
             onBackHome={() => {
@@ -2261,7 +2308,10 @@ export default function App() {
           }
           onOpenWeatherModal={() => {
             setModal(null);
-            setWeatherFocus({ section: 'hourly', index: 0 });
+            setWeatherFocus({
+              section: weather.activeAlerts.length > 0 ? 'alert' : 'hourly',
+              index: 0,
+            });
             setScreen('weather');
           }}
           onOpenAlbumPicker={() => setModal({ type: 'album-picker' })}

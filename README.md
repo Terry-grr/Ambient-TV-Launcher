@@ -91,11 +91,49 @@ adb shell cmd package set-home-activity com.google.android.apps.tv.launcherx/.Ho
 
 ---
 
+## Weather & Warning Sources
+
+Ambient TV Launcher separates forecasts from severe weather warnings so forecasts work worldwide while official advisories reflect real meteorological alerts where available.
+
+### Forecasts & Location
+
+- **Weather Forecasts & City Search**: Powered by [Open-Meteo](https://open-meteo.com/) (keyless Celsius current conditions, 24-hour hourly slices, 7-day daily forecasts, and manual city search).
+- **Approximate Device Location**: When Auto Location (GPS) is enabled, city names are looked up via [BigDataCloud](https://www.bigdatacloud.com/), with coarse IP-level fallback via [GeoJS](https://www.geojs.io/) / [ipwho.is](https://ipwho.is/) when GPS is unavailable.
+
+### Regional Official Weather Warnings
+
+| Region | Official Source | How It Matches Your Area |
+|---|---|---|
+| **New Zealand** | [MetService New Zealand](https://www.metservice.com/) (`alerts.metservice.com/cap/rss`) | Official CAP 1.2 Warnings & Watches matched to your coordinates and coastal boundary |
+| **United States** | [NOAA / National Weather Service](https://www.weather.gov/) (`api.weather.gov`) | Official NWS point-based active weather alerts |
+| **Australia** | [Bureau of Meteorology](http://www.bom.gov.au/) via [WMO SWIC](https://severeweather.wmo.int/) | Official CAP 1.2 RSS alerts matched by polygon, circle radius, or area name |
+| **Canada** | [Alert Ready / NAADS](https://www.alertready.ca/) (`rss.naad-adna.pelmorex.com`) | Official Atom + GeoRSS + CAP 1.2 weather warnings matched to your area |
+| **Europe (30+ countries)** | [MeteoAlarm](https://meteoalarm.org/) (`feeds.meteoalarm.org`) | Country-scoped Atom + CAP 1.2 feeds matched by geometry or region name |
+| **Other Countries** | Custom CAP Feed or Open-Meteo fallback | Add your local CAP feed in Settings (see below); otherwise uses extreme forecast thresholds |
+
+### Using Warnings in Other Regions (No Code Required)
+
+If you live outside the preconfigured countries above—or prefer a specific regional/state feed—you can add your own official feed directly inside the app:
+
+1. Find an official `https://` **CAP RSS 2.0** or **Atom** feed for your country or region—for example from the **[WMO Severe Weather Information Centre](https://severeweather.wmo.int/)** (`https://severeweather.wmo.int/v2/cap-alerts/<feed-id>/rss.xml`) or your national weather agency.
+2. Open **Settings → Weather → Regional CAP Warning Feed (Optional)**.
+3. Paste the `https://` feed URL and select **Save Feed** to verify and activate live warnings for your location.
+
+### Adding a New Built-In Region (Contributors)
+
+If you are building from source and want to contribute native support for another country or agency:
+
+1. **Region Detection**: Add a bounding-box or country/timezone matcher in `src/services/weatherService.ts`.
+2. **Feed Adapter**: Pass any standard OASIS CAP 1.2 RSS/Atom endpoint into `fetchCapFeedAlerts` (it already parses `<polygon>`, `<circle>`, `<georss:polygon>`, `<areaDesc>`, severity levels, and Red/Orange/Yellow colour codes).
+3. **Device & Preview Fetching**: On Android TV, `CapacitorHttp` fetches CAP feeds directly on-device without CORS proxies; in web preview, `vite.config.ts` validates requests through the SSRF-guarded `/api/cap-proxy`.
+
+---
+
 ## Privacy & Network Disclosures
 
 - **Zero Telemetry & Zero Ads**: Ambient TV Launcher contains no analytics SDKs, ad trackers, user accounts, or background telemetry.
-- **On-Device Storage**: Settings, weather tag overrides, and custom URLs are stored locally on your device. Local album photos stay strictly on-device in IndexedDB (`android:allowBackup="false"` prevents cloud backup export).
-- **Approximate Weather Location**: When Weather is enabled in GPS mode, the launcher requests coarse city-level location (`ACCESS_COARSE_LOCATION`) and rounds latitude/longitude to 2 decimal places (`~1.1 km`) before querying [Open-Meteo](https://open-meteo.com/) and [BigDataCloud](https://www.bigdatacloud.com/). You can also disable Weather or switch to a manual city at any time.
+- **On-Device Storage**: Settings, custom CAP feed URLs, weather tag overrides, and custom wallpaper URLs are stored locally on your device. Local album photos stay strictly on-device in IndexedDB (`android:allowBackup="false"` prevents cloud backup export).
+- **Approximate Weather Location**: When Weather is enabled in GPS mode, the launcher requests coarse city-level location (`ACCESS_COARSE_LOCATION`) and rounds latitude/longitude to 2 decimal places (`~1.1 km`) before querying [Open-Meteo](https://open-meteo.com/), [BigDataCloud](https://www.bigdatacloud.com/), and the matching regional CAP warning feed. You can also disable Weather or switch to a manual city at any time.
 - **External Wallpaper & Update Requests**: Loading curated open-access images or tapping **Refresh Catalog** connects directly to NASA Images, Cleveland Museum of Art Open Access, and Wikimedia Commons with `referrerPolicy="no-referrer"`. Checking for updates in Settings queries the public GitHub Releases API only when requested.
 
 ---

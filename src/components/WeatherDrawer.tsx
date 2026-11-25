@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Cloud,
   Droplets,
   LocateFixed,
@@ -39,8 +41,39 @@ function formatShortDateFromIso(iso?: string, isDateOnly = false): string {
   return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+function formatAlertTimestamp(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+  return `${day}, ${time}`;
+}
+
+function formatAlertSourceLabel(
+  source: WeatherState['activeAlerts'][number]['source'],
+  verbose = false
+): string {
+  switch (source) {
+    case 'metservice':
+      return verbose ? 'MetService New Zealand' : 'MetService NZ';
+    case 'nws':
+      return verbose ? 'NOAA National Weather Service' : 'NOAA / NWS';
+    case 'meteoalarm':
+      return verbose ? 'MeteoAlarm Europe' : 'MeteoAlarm EU';
+    case 'bom':
+      return verbose ? 'Australian Bureau of Meteorology' : 'Australia BOM';
+    case 'canada':
+      return verbose ? 'Alert Ready / Environment Canada' : 'Alert Ready CA';
+    case 'custom':
+      return verbose ? 'Custom CAP Warning Feed' : 'Custom CAP Feed';
+    default:
+      return verbose ? 'Official Weather Advisory' : 'Area Advisory';
+  }
+}
+
 export interface WeatherDrawerFocus {
-  section: 'header' | 'hourly' | 'daily' | 'controls';
+  section: 'header' | 'alert' | 'hourly' | 'daily' | 'controls';
   index: number;
 }
 
@@ -77,12 +110,15 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<ManualCityOption[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [alertExpanded, setAlertExpanded] = useState(false);
   const [expandedForecast, setExpandedForecast] = useState<{
     kind: 'hourly' | 'daily';
     index: number;
   } | null>(null);
 
   const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const alertBannerRef = useRef<HTMLButtonElement | null>(null);
+  const alertDetailRef = useRef<HTMLDivElement | null>(null);
   const expandedDetailRef = useRef<HTMLDivElement | null>(null);
   const headerRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const hourlyStripRef = useRef<HTMLDivElement | null>(null);
@@ -99,14 +135,20 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     );
   }, []);
 
+  const toggleAlertExpanded = useCallback(() => {
+    setAlertExpanded((prev) => !prev);
+  }, []);
+
   useEffect(() => {
     if (!isOpen) {
       setExpandedForecast(null);
+      setAlertExpanded(false);
     }
   }, [isOpen]);
 
   useEffect(() => {
     setExpandedForecast(null);
+    setAlertExpanded(false);
   }, [weather.activeLocationLabel]);
 
   useEffect(() => {
@@ -121,16 +163,30 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
   }, [expandedForecast]);
 
   useEffect(() => {
+    if (!alertExpanded) return;
+    const raf = requestAnimationFrame(() => {
+      alertDetailRef.current?.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [alertExpanded]);
+
+  useEffect(() => {
     if (!isOpen) return;
     const onWeatherSubBack = (e: Event) => {
       if (expandedForecast) {
         e.preventDefault();
         setExpandedForecast(null);
+      } else if (alertExpanded) {
+        e.preventDefault();
+        setAlertExpanded(false);
       }
     };
     window.addEventListener('tv-weather-subback', onWeatherSubBack);
     return () => window.removeEventListener('tv-weather-subback', onWeatherSubBack);
-  }, [isOpen, expandedForecast]);
+  }, [isOpen, expandedForecast, alertExpanded]);
 
   const lastHandledActivateSignalRef = useRef<number>(activateSignal);
   const focusRef = useRef<WeatherDrawerFocus>(focus);
@@ -142,6 +198,7 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     onToggleSyncBackground,
     onToggleEnabled,
     toggleExpandedForecast,
+    toggleAlertExpanded,
   });
   callbacksRef.current = {
     onRefresh,
@@ -150,6 +207,7 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     onToggleSyncBackground,
     onToggleEnabled,
     toggleExpandedForecast,
+    toggleAlertExpanded,
   };
 
   useEffect(() => {
@@ -166,6 +224,11 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
       if (targetBtn && document.activeElement !== targetBtn) {
         targetBtn.focus({ preventScroll: true });
       }
+    } else if (focus.section === 'alert') {
+      alertBannerRef.current?.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      });
     } else if (focus.section === 'hourly') {
       hourlyCardRefs.current[focus.index]?.scrollIntoView({
         inline: 'nearest',
@@ -204,6 +267,8 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
     if (currentFocus.section === 'header') {
       if (currentFocus.index === 0) cbs.onRefresh();
       else if (currentFocus.index === 1) cbs.onClose();
+    } else if (currentFocus.section === 'alert') {
+      cbs.toggleAlertExpanded();
     } else if (currentFocus.section === 'hourly') {
       cbs.toggleExpandedForecast('hourly', currentFocus.index);
     } else if (currentFocus.section === 'daily') {
@@ -252,6 +317,11 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
   if (!isOpen) return null;
 
   const activeNote = weather.warningHeadline ?? weather.extendedWarningHeadline;
+  const officialAlerts = weather.activeAlerts ?? [];
+  const primaryAlert = officialAlerts[0] ?? null;
+  const isRedWarning =
+    weather.hasWarning &&
+    (primaryAlert?.colourLevel === 'Red' || primaryAlert?.severity === 'Extreme');
   const expandedHourSlot =
     expandedForecast?.kind === 'hourly'
       ? weather.hourly24Hours[expandedForecast.index] ?? null
@@ -336,8 +406,146 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
           ref={scrollBodyRef}
           className="no-scrollbar mt-3 flex-1 space-y-3.5 overflow-y-auto pr-0.5"
         >
-          {/* Weather Warning (highlighted ONLY when an official/severe area warning is active) or plain-text note */}
-          {activeNote &&
+          {/* Weather Warning (expandable official CAP advisory when MetService/NWS alerts exist) or plain-text note */}
+          {officialAlerts.length > 0 && primaryAlert ? (
+            <div className="space-y-2">
+              <button
+                ref={alertBannerRef}
+                type="button"
+                aria-expanded={alertExpanded}
+                onMouseEnter={() => onFocusChange({ section: 'alert', index: 0 })}
+                onFocus={() => onFocusChange({ section: 'alert', index: 0 })}
+                onClick={() => {
+                  onFocusChange({ section: 'alert', index: 0 });
+                  toggleAlertExpanded();
+                }}
+                className={`flex min-h-[46px] w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left text-xs font-medium transition-all focus-visible:outline-none sm:text-sm ${
+                  focus.section === 'alert'
+                    ? isRedWarning
+                      ? 'border-white bg-red-500/25 text-red-100 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]'
+                      : 'border-white bg-amber-500/25 text-amber-100 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]'
+                    : isRedWarning
+                    ? 'border-red-400/45 bg-red-500/15 text-red-100 hover:bg-red-500/20'
+                    : 'border-amber-400/40 bg-amber-500/15 text-amber-200 hover:bg-amber-500/20'
+                }`}
+              >
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <AlertTriangle
+                    size={17}
+                    className={`mt-0.5 shrink-0 ${
+                      isRedWarning ? 'text-red-300' : 'text-amber-300'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 leading-snug">
+                    <div>
+                      <span
+                        className={`font-semibold ${
+                          isRedWarning ? 'text-red-50' : 'text-amber-100'
+                        }`}
+                      >
+                        Warning ·{' '}
+                      </span>
+                      <span>{primaryAlert.headline || primaryAlert.event}</span>
+                    </div>
+                    <div
+                      className={`mt-0.5 text-[11px] font-normal ${
+                        isRedWarning ? 'text-red-200/80' : 'text-amber-200/80'
+                      }`}
+                    >
+                      {formatAlertSourceLabel(primaryAlert.source, false)}
+                      {primaryAlert.areaDesc ? ` · ${primaryAlert.areaDesc}` : ''}
+                      {officialAlerts.length > 1
+                        ? ` · +${officialAlerts.length - 1} more`
+                        : ''}
+                      {' · '}
+                      {alertExpanded ? 'Select to collapse' : 'Select for details'}
+                    </div>
+                  </div>
+                </div>
+                {alertExpanded ? (
+                  <ChevronUp size={16} className="shrink-0 opacity-80" aria-hidden="true" />
+                ) : (
+                  <ChevronDown size={16} className="shrink-0 opacity-80" aria-hidden="true" />
+                )}
+              </button>
+
+              {alertExpanded && (
+                <div
+                  ref={alertDetailRef}
+                  className="space-y-3 rounded-xl border border-white/15 bg-white/[0.06] p-3.5 text-xs sm:text-sm"
+                >
+                  {officialAlerts.map((alert, idx) => {
+                    const alertRed =
+                      alert.colourLevel === 'Red' || alert.severity === 'Extreme';
+                    const onsetText = formatAlertTimestamp(alert.onsetIso);
+                    const expiresText = formatAlertTimestamp(alert.expiresIso);
+                    const nextUpdateText = formatAlertTimestamp(alert.nextUpdateIso);
+                    return (
+                      <div
+                        key={alert.id}
+                        className={
+                          idx > 0 ? 'space-y-2 border-t border-white/10 pt-3' : 'space-y-2'
+                        }
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div
+                              className={`font-display text-sm font-semibold sm:text-base ${
+                                alertRed ? 'text-red-200' : 'text-amber-100'
+                              }`}
+                            >
+                              {alert.headline || alert.event}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-white/65 tabular-nums sm:text-xs">
+                              <span>{formatAlertSourceLabel(alert.source, true)}</span>
+                              {alert.areaDesc ? ` · ${alert.areaDesc}` : ''}
+                              {onsetText && expiresText
+                                ? ` · ${onsetText} – ${expiresText}`
+                                : expiresText
+                                ? ` · Until ${expiresText}`
+                                : ''}
+                            </div>
+                          </div>
+                          {idx === 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setAlertExpanded(false)}
+                              aria-label="Collapse official weather warning details"
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/70 hover:bg-white/15 hover:text-white"
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                        </div>
+
+                        {alert.description && (
+                          <p className="leading-relaxed text-white/85">
+                            {alert.description}
+                          </p>
+                        )}
+
+                        {alert.instruction && (
+                          <p className="leading-relaxed text-white/75">
+                            {!/^(action|instruction|advice)/i.test(alert.instruction)
+                              ? `Advice: ${alert.instruction}`
+                              : alert.instruction}
+                          </p>
+                        )}
+
+                        {nextUpdateText && (
+                          <div className="text-[11px] text-white/50 tabular-nums">
+                            Next update: {nextUpdateText}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            activeNote &&
             (weather.hasWarning ? (
               <div
                 role="alert"
@@ -351,7 +559,8 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
               </div>
             ) : (
               <p className="px-0.5 text-xs text-white/75 sm:text-sm">{activeNote}</p>
-            ))}
+            ))
+          )}
 
           {/* Current Summary Card */}
           {weather.current ? (
@@ -360,7 +569,11 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                 {renderWeatherIcon(
                   weather.current.weatherCode,
                   32,
-                  weather.hasWarning ? 'text-amber-300' : 'text-white'
+                  isRedWarning
+                    ? 'text-red-300'
+                    : weather.hasWarning
+                    ? 'text-amber-300'
+                    : 'text-white'
                 )}
                 <div>
                   <div className="font-display text-2xl font-medium tracking-tight text-white tabular-nums sm:text-3xl">
@@ -456,8 +669,10 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       {renderWeatherIcon(
                         slot.weatherCode,
                         18,
-                        slot.isSevereWarning && weather.hasWarning
-                          ? 'text-amber-300'
+                        slot.isSevereWarning
+                          ? slot.warningColour === 'Red'
+                            ? 'text-red-300'
+                            : 'text-amber-300'
                           : 'text-white/90'
                       )}
                     </div>
@@ -482,8 +697,10 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                     {renderWeatherIcon(
                       expandedHourSlot.weatherCode,
                       26,
-                      expandedHourSlot.isSevereWarning && weather.hasWarning
-                        ? 'text-amber-300'
+                      expandedHourSlot.isSevereWarning
+                        ? expandedHourSlot.warningColour === 'Red'
+                          ? 'text-red-300'
+                          : 'text-amber-300'
                         : 'text-white'
                     )}
                     <div>
@@ -501,6 +718,18 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                           ? ` (Feels ${expandedHourSlot.apparentTempC}°)`
                           : ''}
                       </div>
+                      {expandedHourSlot.isSevereWarning && expandedHourSlot.warningHeadline && (
+                        <div
+                          className={`mt-1 flex items-center gap-1.5 text-xs font-medium ${
+                            expandedHourSlot.warningColour === 'Red'
+                              ? 'text-red-300'
+                              : 'text-amber-300'
+                          }`}
+                        >
+                          <AlertTriangle size={12} className="shrink-0" aria-hidden="true" />
+                          <span>{expandedHourSlot.warningHeadline}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <button
@@ -638,8 +867,10 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                       {renderWeatherIcon(
                         day.weatherCode,
                         18,
-                        day.isSevereWarning && weather.hasWarning
-                          ? 'text-amber-300'
+                        day.isSevereWarning
+                          ? day.warningColour === 'Red'
+                            ? 'text-red-300'
+                            : 'text-amber-300'
                           : 'text-white/90'
                       )}
                     </div>
@@ -665,8 +896,10 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                     {renderWeatherIcon(
                       expandedDaySlot.weatherCode,
                       26,
-                      expandedDaySlot.isSevereWarning && weather.hasWarning
-                        ? 'text-amber-300'
+                      expandedDaySlot.isSevereWarning
+                        ? expandedDaySlot.warningColour === 'Red'
+                          ? 'text-red-300'
+                          : 'text-amber-300'
                         : 'text-white'
                     )}
                     <div>
@@ -682,6 +915,18 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                         {expandedDaySlot.conditionLabel} · High {expandedDaySlot.tempMaxC}° / Low{' '}
                         {expandedDaySlot.tempMinC}°C
                       </div>
+                      {expandedDaySlot.isSevereWarning && expandedDaySlot.warningHeadline && (
+                        <div
+                          className={`mt-1 flex items-center gap-1.5 text-xs font-medium ${
+                            expandedDaySlot.warningColour === 'Red'
+                              ? 'text-red-300'
+                              : 'text-amber-300'
+                          }`}
+                        >
+                          <AlertTriangle size={12} className="shrink-0" aria-hidden="true" />
+                          <span>{expandedDaySlot.warningHeadline}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <button
