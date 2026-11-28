@@ -199,6 +199,8 @@ import android.media.tv.TvInputManager;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.view.View;
+import android.view.inputmethod.InputMethodManager;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -209,13 +211,30 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONObject;
 
 @CapacitorPlugin(
     name = "TvSystemSettings",
@@ -906,6 +925,403 @@ public class TvSystemSettingsPlugin extends Plugin {
         } catch (Exception ex) {
             call.reject("Unable to open TV input settings", ex);
         }
+    }
+
+    @PluginMethod
+    public void showSoftInput(PluginCall call) {
+        if (getBridge() == null || getBridge().getWebView() == null) {
+            call.resolve();
+            return;
+        }
+        final View webView = getBridge().getWebView();
+        webView.post(() -> {
+            try {
+                webView.requestFocus();
+                InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+                }
+            } catch (Throwable ignored) {
+                // Ignore OEM IME quirks
+            }
+            call.resolve();
+        });
+    }
+
+    private final Object qrLock = new Object();
+    private ServerSocket qrServerSocket = null;
+    private Thread qrServerThread = null;
+    private final AtomicBoolean qrSessionConsumed = new AtomicBoolean(false);
+    private final SecureRandom qrSecureRandom = new SecureRandom();
+
+    @Override
+    protected void handleOnDestroy() {
+        stopQrPasteInternal();
+        super.handleOnDestroy();
+    }
+
+    private void stopQrPasteInternal() {
+        ServerSocket toClose;
+        Thread threadToStop;
+        synchronized (qrLock) {
+            toClose = qrServerSocket;
+            threadToStop = qrServerThread;
+            qrServerSocket = null;
+            qrServerThread = null;
+            qrSessionConsumed.set(false);
+        }
+        if (toClose != null) {
+            try {
+                toClose.close();
+            } catch (Throwable ignored) {
+                // Ignore close failure
+            }
+        }
+        if (threadToStop != null) {
+            threadToStop.interrupt();
+        }
+    }
+
+    private String generateQrToken() {
+        byte[] bytes = new byte[24];
+        qrSecureRandom.nextBytes(bytes);
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.US, "%02x", b & 0xff));
+        }
+        return sb.toString();
+    }
+
+    private InetAddress resolveLocalLanIpv4() {
+        InetAddress fallback = null;
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces == null) return null;
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface nif = interfaces.nextElement();
+                if (nif == null || !nif.isUp() || nif.isLoopback() || nif.isVirtual()) continue;
+                String nifName = nif.getName() != null ? nif.getName().toLowerCase(Locale.US) : "";
+                Enumeration<InetAddress> addrs = nif.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (!(addr instanceof Inet4Address)) continue;
+                    if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isMulticastAddress()) continue;
+                    if (nifName.startsWith("wlan") || nifName.startsWith("eth") || nifName.startsWith("en")) {
+                        return addr;
+                    }
+                    if (addr.isSiteLocalAddress() && fallback == null) {
+                        fallback = addr;
+                    } else if (fallback == null) {
+                        fallback = addr;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+        return fallback;
+    }
+
+    private static String escapeHtmlText(String input) {
+        if (input == null) return "";
+        StringBuilder out = new StringBuilder(input.length() + 16);
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            switch (c) {
+                case '&': out.append("&amp;"); break;
+                case '<': out.append("&lt;"); break;
+                case '>': out.append("&gt;"); break;
+                case '"': out.append("&quot;"); break;
+                case '\\'': out.append("&#39;"); break;
+                default:
+                    if (c >= 32 && c != 127) out.append(c);
+                    break;
+            }
+        }
+        return out.toString();
+    }
+
+    private String buildQrMobilePageHtml(String label, String token) {
+        String safeLabel = escapeHtmlText(label);
+        String safePath = "/p/" + escapeHtmlText(token);
+        return "<!doctype html><html lang=\\"en\\"><head>"
+            + "<meta charset=\\"utf-8\\">"
+            + "<meta name=\\"viewport\\" content=\\"width=device-width,initial-scale=1\\">"
+            + "<title>Send URL to TV</title>"
+            + "<style>"
+            + "body{margin:0;padding:20px;background:#07080A;color:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;}"
+            + ".card{max-width:460px;margin:0 auto;background:#111520;border:1px solid rgba(255,255,255,.16);border-radius:20px;padding:20px;box-sizing:border-box;}"
+            + "h1{margin:0 0 6px;font-size:20px;font-weight:600;}"
+            + "p{margin:0 0 14px;font-size:14px;line-height:1.45;color:rgba(248,250,252,.72);}"
+            + "textarea{width:100%;min-height:108px;box-sizing:border-box;border-radius:12px;border:1px solid rgba(255,255,255,.22);background:#07080A;color:#fff;padding:12px;font-size:15px;resize:vertical;}"
+            + ".row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}"
+            + "button{flex:1;min-height:46px;border-radius:12px;border:none;font-size:15px;font-weight:600;cursor:pointer;padding:10px 14px;}"
+            + ".secondary{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.18);}"
+            + ".primary{background:#fff;color:#07080A;}"
+            + ".status{margin-top:12px;font-size:13px;min-height:20px;color:#93C5FD;}"
+            + ".err{color:#FCD34D;}.ok{color:#6EE7B7;}"
+            + "</style></head><body>"
+            + "<div class=\\"card\\">"
+            + "<h1>Send to Ambient TV</h1>"
+            + "<p>Paste the <strong>" + safeLabel + "</strong> below and tap Send to fill it on your TV.</p>"
+            + "<form id=\\"f\\">"
+            + "<textarea id=\\"u\\" placeholder=\\"https://...\\" autocapitalize=\\"off\\" autocomplete=\\"off\\" spellcheck=\\"false\\" required></textarea>"
+            + "<div class=\\"row\\">"
+            + "<button type=\\"button\\" id=\\"pb\\" class=\\"secondary\\">Paste Clipboard</button>"
+            + "<button type=\\"submit\\" id=\\"sb\\" class=\\"primary\\">Send to TV</button>"
+            + "</div>"
+            + "<div id=\\"st\\" class=\\"status\\"></div>"
+            + "</form></div>"
+            + "<script>"
+            + "var u=document.getElementById('u'),st=document.getElementById('st'),pb=document.getElementById('pb'),sb=document.getElementById('sb');"
+            + "function msg(t,c){st.className='status '+(c||'');st.textContent=t;}"
+            + "pb.addEventListener('click',function(){"
+            + "if(!navigator.clipboard||!navigator.clipboard.readText){msg('Tap the box above and choose Paste.','err');u.focus();return;}"
+            + "navigator.clipboard.readText().then(function(txt){if(txt){u.value=txt.trim();msg('Pasted from clipboard.');}else{msg('Clipboard is empty.','err');}})"
+            + ".catch(function(){msg('Tap inside the box above and choose Paste.','err');u.focus();});"
+            + "});"
+            + "document.getElementById('f').addEventListener('submit',function(e){"
+            + "e.preventDefault();var val=(u.value||'').trim(),low=val.toLowerCase();"
+            + "if((low.indexOf('https://')!==0&&low.indexOf('http://')!==0)||val.length<10||val.indexOf(' ')!==-1){msg('Enter a valid http:// or https:// URL.','err');return;}"
+            + "sb.disabled=true;msg('Sending to TV...');"
+            + "fetch('" + safePath + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:val})})"
+            + ".then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})"
+            + ".then(function(res){if(res.ok&&res.d&&res.d.ok){msg('Sent! You can close this page and review the URL on your TV.','ok');}"
+            + "else{sb.disabled=false;msg((res.d&&res.d.error)||'Could not send URL.','err');}})"
+            + ".catch(function(){sb.disabled=false;msg('Connection lost. Check that you are on the same Wi-Fi.','err');});"
+            + "});"
+            + "</script></body></html>";
+    }
+
+    private void writeHttpResponse(OutputStream out, int code, String statusText, String contentType, String body) throws Exception {
+        byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+        String headers = "HTTP/1.1 " + code + " " + statusText + "\\r\\n"
+            + "Content-Type: " + contentType + "\\r\\n"
+            + "Content-Length: " + bodyBytes.length + "\\r\\n"
+            + "Cache-Control: no-store\\r\\n"
+            + "Connection: close\\r\\n\\r\\n";
+        out.write(headers.getBytes(StandardCharsets.US_ASCII));
+        out.write(bodyBytes);
+        out.flush();
+    }
+
+    private void handleQrSocketClient(Socket client, ServerSocket expectedSocket, String expectedToken, String label) {
+        try {
+            client.setSoTimeout(5000);
+            InputStream rawIn = new BufferedInputStream(client.getInputStream());
+            OutputStream out = client.getOutputStream();
+
+            ByteArrayOutputStream headerBuf = new ByteArrayOutputStream();
+            int b;
+            int headerLimit = 8192;
+            boolean headersEnded = false;
+            while (headerBuf.size() < headerLimit && (b = rawIn.read()) != -1) {
+                headerBuf.write(b);
+                int sz = headerBuf.size();
+                byte[] arr = headerBuf.toByteArray();
+                if (sz >= 4 && arr[sz - 4] == '\\r' && arr[sz - 3] == '\\n' && arr[sz - 2] == '\\r' && arr[sz - 1] == '\\n') {
+                    headersEnded = true;
+                    break;
+                }
+            }
+            if (!headersEnded) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Malformed request");
+                return;
+            }
+
+            String headerText = new String(headerBuf.toByteArray(), StandardCharsets.ISO_8859_1);
+            String[] lines = headerText.split("\\r\\n");
+            if (lines.length == 0) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Bad request");
+                return;
+            }
+            String[] reqParts = lines[0].split(" ");
+            if (reqParts.length < 2) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Bad request line");
+                return;
+            }
+            String method = reqParts[0].toUpperCase(Locale.US);
+            String rawPath = reqParts[1];
+            int qIdx = rawPath.indexOf('?');
+            String path = qIdx >= 0 ? rawPath.substring(0, qIdx) : rawPath;
+
+            String expectedPath = "/p/" + expectedToken;
+            if (!expectedPath.equals(path)) {
+                writeHttpResponse(out, 403, "Forbidden", "text/plain; charset=utf-8", "Invalid or expired QR session.");
+                return;
+            }
+
+            if ("GET".equals(method)) {
+                if (qrSessionConsumed.get()) {
+                    writeHttpResponse(out, 410, "Gone", "text/plain; charset=utf-8", "QR session already completed.");
+                    return;
+                }
+                writeHttpResponse(out, 200, "OK", "text/html; charset=utf-8", buildQrMobilePageHtml(label, expectedToken));
+                return;
+            }
+
+            if (!"POST".equals(method)) {
+                writeHttpResponse(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "Method not allowed");
+                return;
+            }
+
+            int contentLength = 0;
+            String contentType = "";
+            for (int i = 1; i < lines.length; i++) {
+                int colon = lines[i].indexOf(':');
+                if (colon <= 0) continue;
+                String hName = lines[i].substring(0, colon).trim().toLowerCase(Locale.US);
+                String hVal = lines[i].substring(colon + 1).trim();
+                if ("content-length".equals(hName)) {
+                    try {
+                        contentLength = Integer.parseInt(hVal);
+                    } catch (NumberFormatException ignored) {
+                        contentLength = -1;
+                    }
+                } else if ("content-type".equals(hName)) {
+                    contentType = hVal.toLowerCase(Locale.US);
+                }
+            }
+
+            if (contentLength <= 0 || contentLength > 8192) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Invalid payload size.\\"}");
+                return;
+            }
+
+            byte[] bodyBytes = new byte[contentLength];
+            int readTotal = 0;
+            while (readTotal < contentLength) {
+                int r = rawIn.read(bodyBytes, readTotal, contentLength - readTotal);
+                if (r == -1) break;
+                readTotal += r;
+            }
+            String bodyStr = new String(bodyBytes, 0, readTotal, StandardCharsets.UTF_8);
+
+            String submittedUrl = "";
+            if (contentType.contains("application/json")) {
+                try {
+                    JSONObject obj = new JSONObject(bodyStr);
+                    submittedUrl = obj.optString("url", "");
+                } catch (Throwable ignored) {
+                    submittedUrl = "";
+                }
+            } else {
+                for (String pair : bodyStr.split("&")) {
+                    int eq = pair.indexOf('=');
+                    if (eq > 0 && "url".equals(pair.substring(0, eq))) {
+                        submittedUrl = URLDecoder.decode(pair.substring(eq + 1), "UTF-8");
+                        break;
+                    }
+                }
+            }
+
+            submittedUrl = submittedUrl != null ? submittedUrl.trim() : "";
+            boolean validScheme = submittedUrl.toLowerCase(Locale.US).startsWith("https://")
+                || submittedUrl.toLowerCase(Locale.US).startsWith("http://");
+            boolean hasControl = false;
+            for (int i = 0; i < submittedUrl.length(); i++) {
+                if (submittedUrl.charAt(i) < 32 || submittedUrl.charAt(i) == 127) {
+                    hasControl = true;
+                    break;
+                }
+            }
+
+            if (!validScheme || hasControl || submittedUrl.length() > 2048 || submittedUrl.contains(" ")) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Enter a valid http:// or https:// URL without spaces.\\"}");
+                return;
+            }
+
+            if (!qrSessionConsumed.compareAndSet(false, true)) {
+                writeHttpResponse(out, 410, "Gone", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"This QR session was already used.\\"}");
+                return;
+            }
+
+            writeHttpResponse(out, 200, "OK", "application/json; charset=utf-8", "{\\"ok\\":true}");
+
+            final String finalUrl = submittedUrl;
+            JSObject eventData = new JSObject();
+            eventData.put("token", expectedToken);
+            eventData.put("url", finalUrl);
+            notifyListeners("qrPasteReceived", eventData);
+
+            synchronized (qrLock) {
+                if (qrServerSocket == expectedSocket) {
+                    stopQrPasteInternal();
+                }
+            }
+        } catch (Throwable ignored) {
+            // Client timed out or disconnected
+        } finally {
+            try {
+                client.close();
+            } catch (Throwable ignored) {
+                // Ignore
+            }
+        }
+    }
+
+    @PluginMethod
+    public void startQrPasteSession(PluginCall call) {
+        stopQrPasteInternal();
+
+        String rawLabel = call.getString("fieldLabel", "URL");
+        final String cleanLabel = (rawLabel == null || rawLabel.trim().isEmpty())
+            ? "URL"
+            : rawLabel.trim().substring(0, Math.min(rawLabel.trim().length(), 48));
+
+        InetAddress lanAddr = resolveLocalLanIpv4();
+        if (lanAddr == null) {
+            call.reject("No active Wi-Fi or Ethernet IPv4 address found.");
+            return;
+        }
+
+        try {
+            final ServerSocket server = new ServerSocket(0, 8, lanAddr);
+            server.setSoTimeout(1500);
+            final String token = generateQrToken();
+            final int port = server.getLocalPort();
+            final String hostIp = lanAddr.getHostAddress();
+            final String sessionUrl = "http://" + hostIp + ":" + port + "/p/" + token;
+
+            Thread worker = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted() && !server.isClosed()) {
+                    try {
+                        final Socket client = server.accept();
+                        Thread handler = new Thread(() -> handleQrSocketClient(client, server, token, cleanLabel));
+                        handler.setDaemon(true);
+                        handler.start();
+                    } catch (SocketTimeoutException ignored) {
+                        // Loop check
+                    } catch (Throwable ignored) {
+                        break;
+                    }
+                }
+            }, "TvQrPasteServer");
+            worker.setDaemon(true);
+
+            synchronized (qrLock) {
+                qrServerSocket = server;
+                qrServerThread = worker;
+                qrSessionConsumed.set(false);
+            }
+            worker.start();
+
+            JSObject res = new JSObject();
+            res.put("url", sessionUrl);
+            res.put("token", token);
+            res.put("ip", hostIp);
+            res.put("port", port);
+            call.resolve(res);
+        } catch (Exception ex) {
+            stopQrPasteInternal();
+            call.reject("Unable to start local QR paste server", ex);
+        }
+    }
+
+    @PluginMethod
+    public void stopQrPasteSession(PluginCall call) {
+        stopQrPasteInternal();
+        call.resolve();
     }
 }
 `;

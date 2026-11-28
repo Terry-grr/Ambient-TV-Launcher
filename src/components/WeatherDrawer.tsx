@@ -16,6 +16,7 @@ import {
   Wind,
   X,
 } from 'lucide-react';
+import { showAndroidSoftKeyboard } from '../services/systemSettings';
 import { searchCitiesByName } from '../services/weatherService';
 import { ManualCityOption, WeatherState } from '../types/launcher';
 import { renderWeatherIcon } from './WeatherWidget';
@@ -275,7 +276,21 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
       cbs.toggleExpandedForecast('daily', currentFocus.index);
     } else if (currentFocus.section === 'controls') {
       if (currentFocus.index === 0) cbs.onUseGps();
-      else if (currentFocus.index === 1) searchInputRef.current?.focus();
+      else if (currentFocus.index === 1) {
+        const inputEl = searchInputRef.current;
+        if (inputEl) {
+          inputEl.readOnly = false;
+          inputEl.dataset.tvTextEditing = 'true';
+          inputEl.focus();
+          try {
+            const len = inputEl.value.length;
+            inputEl.setSelectionRange(len, len);
+          } catch {
+            // Ignore selection errors
+          }
+          void showAndroidSoftKeyboard();
+        }
+      }
       else if (currentFocus.index === 2) searchSubmitRef.current?.click();
       else if (currentFocus.index === 3) cbs.onToggleSyncBackground();
       else if (currentFocus.index === 4) cbs.onToggleEnabled();
@@ -1050,7 +1065,13 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
                 }}
                 type="text"
                 value={cityQuery}
-                onFocus={() => onFocusChange({ section: 'controls', index: 1 })}
+                onFocus={(e) => {
+                  e.currentTarget.dataset.tvTextEditing = 'true';
+                  onFocusChange({ section: 'controls', index: 1 });
+                }}
+                onBlur={(e) => {
+                  delete e.currentTarget.dataset.tvTextEditing;
+                }}
                 onChange={(e) => setCityQuery(e.target.value)}
                 placeholder="Search manual fallback city…"
                 className={`min-h-[44px] flex-1 rounded-xl border bg-black/40 px-3.5 text-xs text-white placeholder:text-white/40 focus:outline-none sm:text-sm ${

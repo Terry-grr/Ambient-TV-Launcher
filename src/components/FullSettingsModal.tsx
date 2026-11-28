@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   CheckCircle2,
   CloudSun,
@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitBranch,
   Image as ImageIcon,
+  QrCode,
   RefreshCw,
   RotateCcw,
   Sliders,
@@ -30,6 +31,7 @@ import {
   normalizeSafeHttpsFeedUrl,
   parseGithubRepoSlug,
 } from '../utils/urlValidation';
+import { QrPasteModal } from './QrPasteModal';
 
 interface FullSettingsModalProps {
   initialTab: 'general' | 'weather' | 'albums' | 'apps' | 'github';
@@ -102,6 +104,9 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
   const [latestRelease, setLatestRelease] = useState<GithubReleaseInfo | null>(null);
   const [capFeedInput, setCapFeedInput] = useState(settings.customCapFeedUrl || '');
   const [capTesting, setCapTesting] = useState(false);
+  const [showCapQrModal, setShowCapQrModal] = useState(false);
+  const capSaveBtnRef = useRef<HTMLButtonElement | null>(null);
+  const capQrBtnRef = useRef<HTMLButtonElement | null>(null);
   const [capFeedback, setCapFeedback] = useState<{
     type: 'ok' | 'error';
     message: string;
@@ -466,6 +471,16 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
                     className="min-h-[40px] min-w-0 flex-1 rounded-xl border border-white/15 bg-black/50 px-3 text-xs text-white placeholder-white/40 focus:border-white focus:outline-none sm:text-sm"
                   />
                   <button
+                    ref={capQrBtnRef}
+                    type="button"
+                    onClick={() => setShowCapQrModal(true)}
+                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/8 px-3 text-xs font-medium text-white hover:bg-white/15"
+                  >
+                    <QrCode size={14} />
+                    <span>Phone QR</span>
+                  </button>
+                  <button
+                    ref={capSaveBtnRef}
                     type="button"
                     disabled={capTesting}
                     onClick={async () => {
@@ -828,6 +843,34 @@ export const FullSettingsModal: React.FC<FullSettingsModalProps> = ({
           )}
         </div>
       </div>
+
+      {showCapQrModal && (
+        <QrPasteModal
+          fieldLabel="CAP Warning Feed URL"
+          requireHttpsOnly
+          onReceiveUrl={(receivedUrl) => {
+            setCapFeedInput(receivedUrl);
+            setCapFeedback({
+              type: 'ok',
+              message: 'Pasted from phone — review the URL and select Save Feed to verify and apply.',
+            });
+            requestAnimationFrame(() =>
+              capSaveBtnRef.current?.focus({ preventScroll: true })
+            );
+          }}
+          onClose={() => {
+            setShowCapQrModal(false);
+            requestAnimationFrame(() => {
+              if (
+                document.activeElement === document.body ||
+                !document.activeElement
+              ) {
+                capQrBtnRef.current?.focus({ preventScroll: true });
+              }
+            });
+          }}
+        />
+      )}
     </div>
   );
 };

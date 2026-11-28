@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   ImagePlus,
   Link as LinkIcon,
+  QrCode,
   RefreshCw,
   SlidersHorizontal,
   Tag,
@@ -31,6 +32,7 @@ import {
 import { getEffectiveWeatherTags } from '../services/wallpaperCatalogService';
 import { isSafeHttpUrl } from '../utils/urlValidation';
 import { QrCodeSvg } from './QrCodeSvg';
+import { QrPasteModal } from './QrPasteModal';
 
 interface AlbumPickerModalProps {
   curatedWallpapers: WallpaperItem[];
@@ -112,7 +114,11 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
   const [titleInput, setTitleInput] = useState('');
   const [creatorInput, setCreatorInput] = useState('');
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlPasteNotice, setUrlPasteNotice] = useState<string | null>(null);
+  const [showUrlQrModal, setShowUrlQrModal] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const customUrlAddBtnRef = useRef<HTMLButtonElement | null>(null);
+  const customUrlQrBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const focusCardById = useCallback((cardId: string) => {
     requestAnimationFrame(() => {
@@ -854,14 +860,25 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                     onChange={(e) => {
                       setUrlInput(e.target.value);
                       if (urlError) setUrlError(null);
+                      if (urlPasteNotice) setUrlPasteNotice(null);
                     }}
                     placeholder="https://example.com/backdrop.jpg"
                     aria-label="Image URL"
                     className="min-h-[44px] flex-1 rounded-xl border border-white/15 bg-black/40 px-3.5 text-sm text-white placeholder:text-white/40 focus:border-white/50 focus:outline-none"
                   />
                   <button
+                    ref={customUrlQrBtnRef}
+                    type="button"
+                    onClick={() => setShowUrlQrModal(true)}
+                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/8 px-3.5 text-xs font-medium text-white hover:bg-white/15"
+                  >
+                    <QrCode size={14} />
+                    <span>Phone QR</span>
+                  </button>
+                  <button
+                    ref={customUrlAddBtnRef}
                     type="submit"
-                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
+                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-white px-4 text-xs font-semibold text-[#07080A] hover:bg-white/90"
                   >
                     <LinkIcon size={14} />
                     <span>Add Image URL</span>
@@ -869,6 +886,9 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                 </div>
 
                 {urlError && <p className="text-xs text-amber-300">{urlError}</p>}
+                {urlPasteNotice && !urlError && (
+                  <p className="text-xs text-emerald-300">{urlPasteNotice}</p>
+                )}
 
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   <input
@@ -1153,6 +1173,33 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {showUrlQrModal && (
+        <QrPasteModal
+          fieldLabel="Custom Wallpaper Image URL"
+          onReceiveUrl={(receivedUrl) => {
+            setUrlInput(receivedUrl);
+            setUrlError(null);
+            setUrlPasteNotice(
+              'Pasted from phone — review the URL and select Add Image URL to save.'
+            );
+            requestAnimationFrame(() =>
+              customUrlAddBtnRef.current?.focus({ preventScroll: true })
+            );
+          }}
+          onClose={() => {
+            setShowUrlQrModal(false);
+            requestAnimationFrame(() => {
+              if (
+                document.activeElement === document.body ||
+                !document.activeElement
+              ) {
+                customUrlQrBtnRef.current?.focus({ preventScroll: true });
+              }
+            });
+          }}
+        />
       )}
     </div>
   );

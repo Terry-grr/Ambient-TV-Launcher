@@ -53,6 +53,7 @@ import {
   openAndroidInputSettings,
   openAndroidSystemSettings,
   requestNativeBluetoothPermission,
+  showAndroidSoftKeyboard,
   switchNativeTvInput,
   toggleNativeBluetooth,
 } from './services/systemSettings';
@@ -162,6 +163,46 @@ function getDialogFocusables(dialog: HTMLElement): HTMLElement[] {
   });
 }
 
+function isDialogTextInput(
+  el: EventTarget | null
+): el is HTMLInputElement | HTMLTextAreaElement {
+  if (el instanceof HTMLTextAreaElement) return !el.disabled;
+  if (el instanceof HTMLInputElement) {
+    return (
+      !el.disabled &&
+      ![
+        'range',
+        'checkbox',
+        'radio',
+        'file',
+        'button',
+        'submit',
+        'reset',
+        'hidden',
+      ].includes(el.type)
+    );
+  }
+  return false;
+}
+
+function armTextInputBorderOnly(el: HTMLInputElement | HTMLTextAreaElement): void {
+  delete el.dataset.tvTextEditing;
+  el.readOnly = true;
+}
+
+function activateTextInputEdit(el: HTMLInputElement | HTMLTextAreaElement): void {
+  el.dataset.tvTextEditing = 'true';
+  el.readOnly = false;
+  el.focus({ preventScroll: true });
+  try {
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  } catch {
+    // Ignore input types that disallow setSelectionRange
+  }
+  void showAndroidSoftKeyboard();
+}
+
 function moveDialogFocus(
   dir: 'up' | 'down' | 'left' | 'right',
   instantScroll: boolean
@@ -176,6 +217,9 @@ function moveDialogFocus(
     const preferred =
       focusables.find((el) => !el.getAttribute('aria-label')?.startsWith('Close')) ??
       focusables[0];
+    if (isDialogTextInput(preferred) && preferred.dataset.tvTextEditing !== 'true') {
+      armTextInputBorderOnly(preferred);
+    }
     preferred.focus({ preventScroll: true });
     preferred.scrollIntoView({
       block: 'nearest',
@@ -299,6 +343,9 @@ function moveDialogFocus(
   }
 
   if (bestEl) {
+    if (isDialogTextInput(bestEl)) {
+      armTextInputBorderOnly(bestEl);
+    }
     bestEl.focus({ preventScroll: true });
     bestEl.scrollIntoView({
       block: 'nearest',
@@ -1128,13 +1175,25 @@ export default function App() {
   // Responsive grid column calculation for D-pad navigation in Apps Drawer
   const getDrawerCols = () => (window.innerWidth >= 640 ? 5 : 2);
 
-  // Auto-focus first control whenever a modal dialog opens or nested sub-dialog mounts
+  // Auto-focus first control & keep modal text inputs border-only until OK/tap
   useEffect(() => {
     if (!modal) return;
     let subTimer: number | null = null;
+    const armIdleInputs = (dialog: HTMLElement) => {
+      const inputs = dialog.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        'input, textarea'
+      );
+      inputs.forEach((el) => {
+        if (isDialogTextInput(el) && el.dataset.tvTextEditing !== 'true') {
+          el.readOnly = true;
+        }
+      });
+    };
+
     const focusModalEntry = () => {
       const dialog = getActiveDialog();
       if (!dialog) return;
+      armIdleInputs(dialog);
       const active = document.activeElement as HTMLElement | null;
       if (active && dialog.contains(active)) return;
       const focusables = getDialogFocusables(dialog);
@@ -1142,6 +1201,9 @@ export default function App() {
         focusables.find((el) => el.dataset.autofocus === 'true') ??
         focusables.find((el) => !el.getAttribute('aria-label')?.startsWith('Close')) ??
         focusables[0];
+      if (preferred && isDialogTextInput(preferred)) {
+        armTextInputBorderOnly(preferred);
+      }
       preferred?.focus({ preventScroll: true });
       preferred?.scrollIntoView({
         block: 'nearest',
@@ -1150,17 +1212,39 @@ export default function App() {
       });
     };
 
+    const onPointerDown = (e: PointerEvent) => {
+      const dialog = getActiveDialog();
+      if (!dialog || !(e.target instanceof Node) || !dialog.contains(e.target)) return;
+      if (isDialogTextInput(e.target)) {
+        e.target.dataset.tvTextEditing = 'true';
+        e.target.readOnly = false;
+      }
+    };
+
+    const onFocusOut = (e: FocusEvent) => {
+      if (isDialogTextInput(e.target)) {
+        const dialog = getActiveDialog();
+        if (dialog && dialog.contains(e.target)) {
+          armTextInputBorderOnly(e.target);
+        }
+      }
+    };
+
     const timer = window.setTimeout(focusModalEntry, 25);
     const observer = new MutationObserver(() => {
       if (subTimer) window.clearTimeout(subTimer);
       subTimer = window.setTimeout(focusModalEntry, 20);
     });
     observer.observe(document.body, { childList: true, subtree: true });
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('focusout', onFocusOut, true);
 
     return () => {
       window.clearTimeout(timer);
       if (subTimer) window.clearTimeout(subTimer);
       observer.disconnect();
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('focusout', onFocusOut, true);
     };
   }, [modal, isNativeAndroid]);
 
@@ -1436,12 +1520,8 @@ export default function App() {
           ? getDialogFocusables(dialog)[0] ?? null
           : null;
       if (target) {
-        if (
-          target instanceof HTMLInputElement &&
-          target.type !== 'range' &&
-          target.type !== 'checkbox'
-        ) {
-          target.focus();
+        if (isDialogTextInput(target)) {
+          activateTextInputEdit(target);
         } else {
           target.click();
         }
@@ -1559,21 +1639,30 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const targetEl = e.target as HTMLElement | null;
       const tag = targetEl?.tagName;
-      const isTextInput =
-        tag === 'TEXTAREA' ||
-        (targetEl instanceof HTMLInputElement &&
-          targetEl.type !== 'range' &&
-          targetEl.type !== 'checkbox');
+      const isTextInput = isDialogTextInput(targetEl);
+      const isActivelyEditingTextInput =
+        isTextInput &&
+        !targetEl.readOnly &&
+        targetEl.dataset.tvTextEditing === 'true';
 
       if (
         e.key === 'Escape' ||
         e.key === 'GoBack' ||
         e.key === 'BrowserBack' ||
         e.keyCode === 4 ||
-        (e.key === 'Backspace' && !isTextInput)
+        (e.key === 'Backspace' && !isActivelyEditingTextInput)
       ) {
         e.preventDefault();
         setTouchRemoteSuppressed(true);
+        if (isActivelyEditingTextInput && targetEl) {
+          if (modalRef.current) {
+            armTextInputBorderOnly(targetEl);
+          } else {
+            delete targetEl.dataset.tvTextEditing;
+            targetEl.blur();
+          }
+          return;
+        }
         handleBackRef.current();
         return;
       }
@@ -1582,7 +1671,10 @@ export default function App() {
         if (tag === 'SELECT') return;
         e.preventDefault();
         setTouchRemoteSuppressed(true);
-        if (isTextInput) (targetEl as HTMLElement).blur();
+        if (isActivelyEditingTextInput && targetEl) {
+          armTextInputBorderOnly(targetEl);
+          if (!modalRef.current) targetEl.blur();
+        }
         handleDirectionRef.current('up');
         return;
       }
@@ -1590,19 +1682,21 @@ export default function App() {
         if (tag === 'SELECT') return;
         e.preventDefault();
         setTouchRemoteSuppressed(true);
-        if (isTextInput) (targetEl as HTMLElement).blur();
+        if (isActivelyEditingTextInput && targetEl) {
+          armTextInputBorderOnly(targetEl);
+          if (!modalRef.current) targetEl.blur();
+        }
         handleDirectionRef.current('down');
         return;
       }
 
-      if (isTextInput) {
+      if (isActivelyEditingTextInput && targetEl) {
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-          const inputEl = targetEl as HTMLInputElement | HTMLTextAreaElement;
           let selStart: number | null = null;
           let selEnd: number | null = null;
           try {
-            selStart = inputEl.selectionStart;
-            selEnd = inputEl.selectionEnd;
+            selStart = targetEl.selectionStart;
+            selEnd = targetEl.selectionEnd;
           } catch {
             selStart = null;
             selEnd = null;
@@ -1610,18 +1704,20 @@ export default function App() {
           const atStart = selStart === null || (selStart === 0 && selEnd === 0);
           const atEnd =
             selStart === null ||
-            (selStart === inputEl.value.length && selEnd === inputEl.value.length);
+            (selStart === targetEl.value.length && selEnd === targetEl.value.length);
           if (e.key === 'ArrowLeft' && atStart) {
             e.preventDefault();
             setTouchRemoteSuppressed(true);
-            inputEl.blur();
+            armTextInputBorderOnly(targetEl);
+            if (!modalRef.current) targetEl.blur();
             handleDirectionRef.current('left');
             return;
           }
           if (e.key === 'ArrowRight' && atEnd) {
             e.preventDefault();
             setTouchRemoteSuppressed(true);
-            inputEl.blur();
+            armTextInputBorderOnly(targetEl);
+            if (!modalRef.current) targetEl.blur();
             handleDirectionRef.current('right');
             return;
           }
@@ -1667,12 +1763,11 @@ export default function App() {
       if (!isOkRemoteKey(e)) return;
       const targetEl = e.target as HTMLElement | null;
       const tag = targetEl?.tagName;
-      const isTextInput =
-        tag === 'TEXTAREA' ||
-        (targetEl instanceof HTMLInputElement &&
-          targetEl.type !== 'range' &&
-          targetEl.type !== 'checkbox');
-      if (!isTextInput && tag !== 'SELECT') {
+      const isActivelyEditingTextInput =
+        isDialogTextInput(targetEl) &&
+        !targetEl.readOnly &&
+        targetEl.dataset.tvTextEditing === 'true';
+      if (!isActivelyEditingTextInput && tag !== 'SELECT') {
         e.preventDefault();
       }
     };
@@ -1681,12 +1776,11 @@ export default function App() {
       if (!isOkRemoteKey(e)) return;
       const targetEl = e.target as HTMLElement | null;
       const tag = targetEl?.tagName;
-      const isTextInput =
-        tag === 'TEXTAREA' ||
-        (targetEl instanceof HTMLInputElement &&
-          targetEl.type !== 'range' &&
-          targetEl.type !== 'checkbox');
-      if (isTextInput || tag === 'SELECT') return;
+      const isActivelyEditingTextInput =
+        isDialogTextInput(targetEl) &&
+        !targetEl.readOnly &&
+        targetEl.dataset.tvTextEditing === 'true';
+      if (isActivelyEditingTextInput || tag === 'SELECT') return;
 
       e.preventDefault();
       if (enterHoldTimerRef.current) {

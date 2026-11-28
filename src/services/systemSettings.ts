@@ -1,4 +1,4 @@
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, PluginListenerHandle, registerPlugin } from '@capacitor/core';
 import { BluetoothDevice, TvInputDevice } from '../types/launcher';
 
 interface NativeBluetoothDevicePayload {
@@ -43,9 +43,28 @@ interface TvSystemSettingsPlugin {
     openedSettings?: boolean;
     enabled: boolean;
   }>;
+  showSoftInput(): Promise<void>;
+  startQrPasteSession(options: { fieldLabel?: string }): Promise<{
+    url: string;
+    token: string;
+    ip: string;
+    port: number;
+  }>;
+  stopQrPasteSession(): Promise<void>;
+  addListener(
+    eventName: 'qrPasteReceived',
+    listenerFunc: (event: { token: string; url: string }) => void
+  ): Promise<PluginListenerHandle>;
 }
 
 const TvSystemSettings = registerPlugin<TvSystemSettingsPlugin>('TvSystemSettings');
+
+export interface QrPasteSessionInfo {
+  url: string;
+  token: string;
+  ip: string;
+  port: number;
+}
 
 export interface SystemSettingsLaunchResult {
   launched: boolean;
@@ -251,3 +270,47 @@ export async function toggleNativeBluetooth(
     return { changed: false, openedSettings: false, enabled: !enable };
   }
 }
+
+export async function showAndroidSoftKeyboard(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await TvSystemSettings.showSoftInput();
+  } catch {
+    // Ignore unsupported platform/IME errors
+  }
+}
+
+export async function startAndroidQrPasteSession(
+  fieldLabel: string
+): Promise<QrPasteSessionInfo> {
+  if (!Capacitor.isNativePlatform()) {
+    throw new Error('Phone QR Paste local Wi-Fi server runs in the Android TV app.');
+  }
+  return await TvSystemSettings.startQrPasteSession({ fieldLabel });
+}
+
+export async function stopAndroidQrPasteSession(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await TvSystemSettings.stopQrPasteSession();
+  } catch {
+    // Ignore teardown errors
+  }
+}
+
+export async function addAndroidQrPasteListener(
+  onReceive: (payload: { token: string; url: string }) => void
+): Promise<() => void> {
+  if (!Capacitor.isNativePlatform()) {
+    return () => {};
+  }
+  try {
+    const handle = await TvSystemSettings.addListener('qrPasteReceived', onReceive);
+    return () => {
+      void handle.remove();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
