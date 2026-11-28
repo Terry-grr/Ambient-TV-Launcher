@@ -299,12 +299,18 @@ async function fetchWmSearch(
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const categoryPullCursor: Record<string, number> = {};
 
 export async function refreshOpenArchiveCatalog(
   targetCategory?: CuratedCategory
 ): Promise<WallpaperItem[]> {
-  const randomOffset = Math.floor(Math.random() * 2) * 15;
-  const page = 1 + Math.floor(Math.random() * 2);
+  const cursorKey = targetCategory ?? 'all';
+  const prevStep = categoryPullCursor[cursorKey] ?? 0;
+  const step = prevStep;
+  categoryPullCursor[cursorKey] = (prevStep + 1) % 6;
+
+  const page = 1 + step;
+  const offset = step * 25;
 
   const shouldFetch = (cat: CuratedCategory) =>
     !targetCategory || targetCategory === cat;
@@ -315,16 +321,16 @@ export async function refreshOpenArchiveCatalog(
     fastBatches.push(fetchNasaCategory('earth from space', 'satellite', page));
   }
   if (shouldFetch('classical-art')) {
-    fastBatches.push(fetchCmaCategory('landscape', 'classical-art', randomOffset, 'Painting'));
+    fastBatches.push(fetchCmaCategory('landscape', 'classical-art', offset, 'Painting'));
   }
   if (shouldFetch('abstract-art')) {
-    fastBatches.push(fetchCmaCategory('abstract', 'abstract-art', randomOffset));
+    fastBatches.push(fetchCmaCategory('abstract', 'abstract-art', offset));
   }
   if (shouldFetch('ink-art')) {
-    fastBatches.push(fetchCmaCategory('ink landscape', 'ink-art', randomOffset));
+    fastBatches.push(fetchCmaCategory('ink landscape', 'ink-art', offset));
   }
   if (shouldFetch('geometric')) {
-    fastBatches.push(fetchCmaCategory('geometric', 'geometric', randomOffset));
+    fastBatches.push(fetchCmaCategory('geometric', 'geometric', offset));
   }
 
   const fastResults = await Promise.all(fastBatches);
@@ -342,7 +348,7 @@ export async function refreshOpenArchiveCatalog(
   const wmItems: WallpaperItem[] = [];
   for (let i = 0; i < selectedWmTargets.length; i++) {
     const [q, cat] = selectedWmTargets[i];
-    const batch = await fetchWmSearch(q, cat, randomOffset);
+    const batch = await fetchWmSearch(q, cat, offset);
     wmItems.push(...batch);
     if (i < selectedWmTargets.length - 1) {
       await wait(650);
@@ -361,7 +367,7 @@ export async function refreshOpenArchiveCatalog(
       const remoteOnly = Array.from(map.values()).filter(
         (w) => !w.id.startsWith('curated-')
       );
-      localStorage.setItem(REMOTE_CACHE_KEY, JSON.stringify(remoteOnly.slice(0, 320)));
+      localStorage.setItem(REMOTE_CACHE_KEY, JSON.stringify(remoteOnly.slice(0, 420)));
     } catch {
       // Ignore storage quota errors
     }

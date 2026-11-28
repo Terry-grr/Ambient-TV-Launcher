@@ -198,7 +198,10 @@ import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 import android.provider.Settings;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import androidx.core.content.ContextCompat;
@@ -213,6 +216,8 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
@@ -234,6 +239,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
 
 @CapacitorPlugin(
@@ -933,14 +939,63 @@ public class TvSystemSettingsPlugin extends Plugin {
             call.resolve();
             return;
         }
+        final Double rawX = call.getDouble("xRatio");
+        final Double rawY = call.getDouble("yRatio");
         final View webView = getBridge().getWebView();
         webView.post(() -> {
             try {
+                webView.setFocusableInTouchMode(true);
                 webView.requestFocus();
-                InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (imm != null) {
-                    imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+
+                if (
+                    rawX != null &&
+                    rawY != null &&
+                    rawX >= 0.0 &&
+                    rawX <= 1.0 &&
+                    rawY >= 0.0 &&
+                    rawY <= 1.0 &&
+                    webView.getWidth() > 0 &&
+                    webView.getHeight() > 0
+                ) {
+                    float tapX = (float) (rawX * webView.getWidth());
+                    float tapY = (float) (rawY * webView.getHeight());
+                    long downTime = SystemClock.uptimeMillis();
+                    MotionEvent down = MotionEvent.obtain(
+                        downTime,
+                        downTime,
+                        MotionEvent.ACTION_DOWN,
+                        tapX,
+                        tapY,
+                        0
+                    );
+                    down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+                    MotionEvent up = MotionEvent.obtain(
+                        downTime,
+                        downTime + 8,
+                        MotionEvent.ACTION_UP,
+                        tapX,
+                        tapY,
+                        0
+                    );
+                    up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+                    webView.dispatchTouchEvent(down);
+                    webView.dispatchTouchEvent(up);
+                    down.recycle();
+                    up.recycle();
                 }
+
+                webView.postDelayed(() -> {
+                    try {
+                        webView.requestFocus();
+                        InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) {
+                            imm.restartInput(webView);
+                            imm.showSoftInput(webView, 0);
+                        }
+                    } catch (Throwable ignored) {
+                        // Ignore OEM IME quirks
+                    }
+                }, 90L);
             } catch (Throwable ignored) {
                 // Ignore OEM IME quirks
             }
@@ -952,11 +1007,13 @@ public class TvSystemSettingsPlugin extends Plugin {
     private ServerSocket qrServerSocket = null;
     private Thread qrServerThread = null;
     private final AtomicBoolean qrSessionConsumed = new AtomicBoolean(false);
+    private final AtomicInteger qrUploadCount = new AtomicInteger(0);
     private final SecureRandom qrSecureRandom = new SecureRandom();
 
     @Override
     protected void handleOnDestroy() {
         stopQrPasteInternal();
+        cleanupStaleQrUploads(0L);
         super.handleOnDestroy();
     }
 
@@ -969,6 +1026,7 @@ public class TvSystemSettingsPlugin extends Plugin {
             qrServerSocket = null;
             qrServerThread = null;
             qrSessionConsumed.set(false);
+            qrUploadCount.set(0);
         }
         if (toClose != null) {
             try {
@@ -1321,6 +1379,391 @@ public class TvSystemSettingsPlugin extends Plugin {
     @PluginMethod
     public void stopQrPasteSession(PluginCall call) {
         stopQrPasteInternal();
+        call.resolve();
+    }
+
+    private File getQrUploadsDir() {
+        File dir = new File(getContext().getCacheDir(), "qr_uploads");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    private void cleanupStaleQrUploads(long maxAgeMs) {
+        try {
+            File dir = new File(getContext().getCacheDir(), "qr_uploads");
+            if (!dir.exists() || !dir.isDirectory()) return;
+            File[] files = dir.listFiles();
+            if (files == null) return;
+            long now = System.currentTimeMillis();
+            for (File f : files) {
+                if (f != null && f.isFile() && (maxAgeMs <= 0L || (now - f.lastModified()) > maxAgeMs)) {
+                    f.delete();
+                }
+            }
+        } catch (Throwable ignored) {
+            // Ignore cleanup issues
+        }
+    }
+
+    private String resolveSafeImageMime(String contentType, byte[] data, int len) {
+        if (data == null || len < 4) return null;
+        int b0 = data[0] & 0xff;
+        int b1 = data[1] & 0xff;
+        int b2 = data[2] & 0xff;
+        int b3 = data[3] & 0xff;
+
+        if (b0 == 0xFF && b1 == 0xD8 && b2 == 0xFF) return "image/jpeg";
+        if (b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47) return "image/png";
+        if (b0 == 0x47 && b1 == 0x49 && b2 == 0x46 && b3 == 0x38) return "image/gif";
+        if (b0 == 0x42 && b1 == 0x4D) return "image/bmp";
+        if (len >= 12 && b0 == 0x52 && b1 == 0x49 && b2 == 0x46 && b3 == 0x46
+            && (data[8] & 0xff) == 0x57 && (data[9] & 0xff) == 0x45 && (data[10] & 0xff) == 0x42 && (data[11] & 0xff) == 0x50) {
+            return "image/webp";
+        }
+        if (len >= 12 && (data[4] & 0xff) == 0x66 && (data[5] & 0xff) == 0x74 && (data[6] & 0xff) == 0x79 && (data[7] & 0xff) == 0x70) {
+            String brand = new String(data, 8, 4, StandardCharsets.US_ASCII).toLowerCase(Locale.US);
+            if ("avif".equals(brand) || "avis".equals(brand)) return "image/avif";
+            if ("heic".equals(brand) || "heix".equals(brand) || "hevc".equals(brand) || "mif1".equals(brand)) {
+                return "image/heic";
+            }
+            if (contentType != null && contentType.startsWith("image/")) {
+                return contentType;
+            }
+        }
+        return null;
+    }
+
+    private String extensionForMime(String mime) {
+        if ("image/png".equals(mime)) return "png";
+        if ("image/webp".equals(mime)) return "webp";
+        if ("image/gif".equals(mime)) return "gif";
+        if ("image/bmp".equals(mime)) return "bmp";
+        if ("image/avif".equals(mime)) return "avif";
+        if ("image/heic".equals(mime) || "image/heif".equals(mime)) return "heic";
+        return "jpg";
+    }
+
+    private String sanitizeUploadDisplayName(String rawHeader, String fallbackExt) {
+        String name = "";
+        if (rawHeader != null && !rawHeader.trim().isEmpty()) {
+            try {
+                name = URLDecoder.decode(rawHeader.trim(), "UTF-8");
+            } catch (Throwable ignored) {
+                name = rawHeader.trim();
+            }
+        }
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\\\'));
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
+        }
+        StringBuilder clean = new StringBuilder();
+        for (int i = 0; i < name.length() && clean.length() < 80; i++) {
+            char c = name.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                || c == '.' || c == '_' || c == '-' || c == ' ') {
+                clean.append(c);
+            } else if (c >= 32) {
+                clean.append('_');
+            }
+        }
+        String result = clean.toString().trim();
+        if (result.isEmpty() || ".".equals(result) || "..".equals(result)) {
+            return "Phone Photo." + fallbackExt;
+        }
+        return result;
+    }
+
+    private String buildQrPhotoUploadPageHtml(String token) {
+        String safePath = "/upload/" + escapeHtmlText(token);
+        return "<!doctype html><html lang=\\"en\\"><head>"
+            + "<meta charset=\\"utf-8\\">"
+            + "<meta name=\\"viewport\\" content=\\"width=device-width,initial-scale=1\\">"
+            + "<title>Upload Photos to TV</title>"
+            + "<style>"
+            + "body{margin:0;padding:20px;background:#07080A;color:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;}"
+            + ".card{max-width:460px;margin:0 auto;background:#111520;border:1px solid rgba(255,255,255,.16);border-radius:20px;padding:20px;box-sizing:border-box;}"
+            + "h1{margin:0 0 6px;font-size:20px;font-weight:600;}"
+            + "p{margin:0 0 14px;font-size:14px;line-height:1.45;color:rgba(248,250,252,.72);}"
+            + ".pick{display:flex;align-items:center;justify-content:center;min-height:56px;border-radius:14px;border:1px dashed rgba(255,255,255,.32);background:rgba(255,255,255,.06);color:#fff;font-size:15px;font-weight:600;cursor:pointer;padding:12px;text-align:center;}"
+            + "input[type=file]{display:none;}"
+            + ".meta{margin-top:10px;font-size:13px;color:rgba(248,250,252,.78);}"
+            + ".primary{margin-top:14px;width:100%;min-height:48px;border-radius:12px;border:none;background:#fff;color:#07080A;font-size:15px;font-weight:600;cursor:pointer;}"
+            + ".primary:disabled{opacity:.5;cursor:default;}"
+            + ".status{margin-top:12px;font-size:13px;min-height:20px;color:#93C5FD;}"
+            + ".err{color:#FCD34D;}.ok{color:#6EE7B7;}"
+            + "</style></head><body>"
+            + "<div class=\\"card\\">"
+            + "<h1>Upload Photos to Ambient TV</h1>"
+            + "<p>Pick one or more photos from your phone to add them directly to your TV&apos;s Local Album.</p>"
+            + "<label class=\\"pick\\" for=\\"pf\\">Choose Photos from Phone</label>"
+            + "<input id=\\"pf\\" type=\\"file\\" accept=\\"image/*\\" multiple>"
+            + "<div id=\\"pm\\" class=\\"meta\\">No photos selected yet.</div>"
+            + "<button type=\\"button\\" id=\\"ub\\" class=\\"primary\\" disabled>Upload to TV</button>"
+            + "<div id=\\"st\\" class=\\"status\\"></div>"
+            + "</div>"
+            + "<script>"
+            + "var pf=document.getElementById('pf'),pm=document.getElementById('pm'),ub=document.getElementById('ub'),st=document.getElementById('st'),picked=[];"
+            + "function msg(t,c){st.className='status '+(c||'');st.textContent=t;}"
+            + "pf.addEventListener('change',function(){"
+            + "picked=Array.prototype.slice.call(pf.files||[],0,25);"
+            + "if(picked.length===0){pm.textContent='No photos selected yet.';ub.disabled=true;return;}"
+            + "pm.textContent=picked.length+(picked.length===1?' photo selected':' photos selected');ub.disabled=false;msg('');"
+            + "});"
+            + "ub.addEventListener('click',function(){"
+            + "if(!picked.length)return;"
+            + "ub.disabled=true;pf.disabled=true;"
+            + "var idx=0,okCount=0;"
+            + "function next(){"
+            + "if(idx>=picked.length){"
+            + "pf.disabled=false;ub.disabled=false;pf.value='';picked=[];pm.textContent='Select more photos or return to your TV.';"
+            + "if(okCount>0){msg('Uploaded '+okCount+(okCount===1?' photo':' photos')+' to your TV!','ok');}"
+            + "return;}"
+            + "var file=picked[idx];idx++;"
+            + "msg('Uploading '+idx+' of '+picked.length+'...');"
+            + "fetch('" + safePath + "',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-File-Name':encodeURIComponent(file.name||'photo.jpg')},body:file})"
+            + ".then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d};});})"
+            + ".then(function(res){if(res.ok&&res.d&&res.d.ok){okCount++;next();}"
+            + "else{pf.disabled=false;ub.disabled=false;msg((res.d&&res.d.error)||'Upload failed.','err');}})"
+            + ".catch(function(){pf.disabled=false;ub.disabled=false;msg('Connection lost. Check your Wi-Fi.','err');});"
+            + "}"
+            + "next();"
+            + "});"
+            + "</script></body></html>";
+    }
+
+    private void handleQrPhotoSocketClient(Socket client, ServerSocket expectedSocket, String expectedToken) {
+        try {
+            client.setSoTimeout(20000);
+            InputStream rawIn = new BufferedInputStream(client.getInputStream());
+            OutputStream out = client.getOutputStream();
+
+            ByteArrayOutputStream headerBuf = new ByteArrayOutputStream();
+            int b;
+            int headerLimit = 8192;
+            boolean headersEnded = false;
+            while (headerBuf.size() < headerLimit && (b = rawIn.read()) != -1) {
+                headerBuf.write(b);
+                int sz = headerBuf.size();
+                byte[] arr = headerBuf.toByteArray();
+                if (sz >= 4 && arr[sz - 4] == '\\r' && arr[sz - 3] == '\\n' && arr[sz - 2] == '\\r' && arr[sz - 1] == '\\n') {
+                    headersEnded = true;
+                    break;
+                }
+            }
+            if (!headersEnded) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Malformed request");
+                return;
+            }
+
+            String headerText = new String(headerBuf.toByteArray(), StandardCharsets.ISO_8859_1);
+            String[] lines = headerText.split("\\r\\n");
+            if (lines.length == 0) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Bad request");
+                return;
+            }
+            String[] reqParts = lines[0].split(" ");
+            if (reqParts.length < 2) {
+                writeHttpResponse(out, 400, "Bad Request", "text/plain; charset=utf-8", "Bad request line");
+                return;
+            }
+            String method = reqParts[0].toUpperCase(Locale.US);
+            String rawPath = reqParts[1];
+            int qIdx = rawPath.indexOf('?');
+            String path = qIdx >= 0 ? rawPath.substring(0, qIdx) : rawPath;
+
+            String expectedPath = "/upload/" + expectedToken;
+            if (!expectedPath.equals(path)) {
+                writeHttpResponse(out, 403, "Forbidden", "text/plain; charset=utf-8", "Invalid or expired QR upload session.");
+                return;
+            }
+
+            if ("GET".equals(method)) {
+                writeHttpResponse(out, 200, "OK", "text/html; charset=utf-8", buildQrPhotoUploadPageHtml(expectedToken));
+                return;
+            }
+
+            if (!"POST".equals(method)) {
+                writeHttpResponse(out, 405, "Method Not Allowed", "text/plain; charset=utf-8", "Method not allowed");
+                return;
+            }
+
+            if (qrUploadCount.get() >= 25) {
+                writeHttpResponse(out, 429, "Too Many Requests", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Session upload limit (25 photos) reached.\\"}");
+                return;
+            }
+
+            long contentLength = 0;
+            String contentType = "";
+            String fileNameHeader = "";
+            for (int i = 1; i < lines.length; i++) {
+                int colon = lines[i].indexOf(':');
+                if (colon <= 0) continue;
+                String hName = lines[i].substring(0, colon).trim().toLowerCase(Locale.US);
+                String hVal = lines[i].substring(colon + 1).trim();
+                if ("content-length".equals(hName)) {
+                    try {
+                        contentLength = Long.parseLong(hVal);
+                    } catch (NumberFormatException ignored) {
+                        contentLength = -1;
+                    }
+                } else if ("content-type".equals(hName)) {
+                    contentType = hVal.toLowerCase(Locale.US);
+                } else if ("x-file-name".equals(hName)) {
+                    fileNameHeader = hVal;
+                }
+            }
+
+            long maxBytes = 20L * 1024L * 1024L;
+            if (contentLength <= 0 || contentLength > maxBytes) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Each photo must be under 20 MB.\\"}");
+                return;
+            }
+
+            int expectedLen = (int) contentLength;
+            byte[] bodyBytes = new byte[expectedLen];
+            int readTotal = 0;
+            while (readTotal < expectedLen) {
+                int r = rawIn.read(bodyBytes, readTotal, expectedLen - readTotal);
+                if (r == -1) break;
+                readTotal += r;
+            }
+            if (readTotal != expectedLen) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Incomplete image upload.\\"}");
+                return;
+            }
+
+            String safeMime = resolveSafeImageMime(contentType, bodyBytes, readTotal);
+            if (safeMime == null) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Unsupported image format.\\"}");
+                return;
+            }
+
+            int slot = qrUploadCount.incrementAndGet();
+            if (slot > 25) {
+                writeHttpResponse(out, 429, "Too Many Requests", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Session upload limit (25 photos) reached.\\"}");
+                return;
+            }
+
+            String ext = extensionForMime(safeMime);
+            String displayName = sanitizeUploadDisplayName(fileNameHeader, ext);
+            File dir = getQrUploadsDir();
+            String dirCanonical = dir.getCanonicalPath();
+            File outFile = new File(dir, "qr_" + System.currentTimeMillis() + "_" + slot + "." + ext);
+            if (!outFile.getCanonicalPath().startsWith(dirCanonical + File.separator)) {
+                writeHttpResponse(out, 400, "Bad Request", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Invalid destination path.\\"}");
+                return;
+            }
+
+            try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                fos.write(bodyBytes, 0, readTotal);
+                fos.flush();
+            }
+
+            synchronized (qrLock) {
+                if (qrServerSocket != expectedSocket) {
+                    outFile.delete();
+                    writeHttpResponse(out, 410, "Gone", "application/json; charset=utf-8", "{\\"ok\\":false,\\"error\\":\\"Upload session closed.\\"}");
+                    return;
+                }
+            }
+
+            writeHttpResponse(out, 200, "OK", "application/json; charset=utf-8", "{\\"ok\\":true}");
+
+            JSObject eventData = new JSObject();
+            eventData.put("token", expectedToken);
+            eventData.put("filePath", outFile.getAbsolutePath());
+            eventData.put("fileName", displayName);
+            eventData.put("mimeType", safeMime);
+            notifyListeners("qrPhotoUploaded", eventData);
+        } catch (Throwable ignored) {
+            // Client timed out or disconnected
+        } finally {
+            try {
+                client.close();
+            } catch (Throwable ignored) {
+                // Ignore
+            }
+        }
+    }
+
+    @PluginMethod
+    public void startQrPhotoUploadSession(PluginCall call) {
+        stopQrPasteInternal();
+        cleanupStaleQrUploads(15L * 60L * 1000L);
+
+        InetAddress lanAddr = resolveLocalLanIpv4();
+        if (lanAddr == null) {
+            call.reject("No active Wi-Fi or Ethernet IPv4 address found.");
+            return;
+        }
+
+        try {
+            final ServerSocket server = new ServerSocket(0, 8, lanAddr);
+            server.setSoTimeout(1500);
+            final String token = generateQrToken();
+            final int port = server.getLocalPort();
+            final String hostIp = lanAddr.getHostAddress();
+            final String sessionUrl = "http://" + hostIp + ":" + port + "/upload/" + token;
+
+            Thread worker = new Thread(() -> {
+                while (!Thread.currentThread().isInterrupted() && !server.isClosed()) {
+                    try {
+                        final Socket client = server.accept();
+                        Thread handler = new Thread(() -> handleQrPhotoSocketClient(client, server, token));
+                        handler.setDaemon(true);
+                        handler.start();
+                    } catch (SocketTimeoutException ignored) {
+                        // Loop check
+                    } catch (Throwable ignored) {
+                        break;
+                    }
+                }
+            }, "TvQrPhotoUploadServer");
+            worker.setDaemon(true);
+
+            synchronized (qrLock) {
+                qrServerSocket = server;
+                qrServerThread = worker;
+                qrSessionConsumed.set(false);
+                qrUploadCount.set(0);
+            }
+            worker.start();
+
+            JSObject res = new JSObject();
+            res.put("url", sessionUrl);
+            res.put("token", token);
+            res.put("ip", hostIp);
+            res.put("port", port);
+            call.resolve(res);
+        } catch (Exception ex) {
+            stopQrPasteInternal();
+            call.reject("Unable to start local QR photo upload server", ex);
+        }
+    }
+
+    @PluginMethod
+    public void stopQrPhotoUploadSession(PluginCall call) {
+        stopQrPasteInternal();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void consumeQrUploadedFile(PluginCall call) {
+        String rawPath = call.getString("filePath", "");
+        if (rawPath != null && !rawPath.trim().isEmpty()) {
+            try {
+                File dir = getQrUploadsDir();
+                String dirCanonical = dir.getCanonicalPath();
+                File target = new File(rawPath);
+                if (target.exists() && target.isFile() && target.getCanonicalPath().startsWith(dirCanonical + File.separator)) {
+                    target.delete();
+                }
+            } catch (Throwable ignored) {
+                // Ignore delete errors
+            }
+        }
         call.resolve();
     }
 }

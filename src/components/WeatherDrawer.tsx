@@ -16,7 +16,7 @@ import {
   Wind,
   X,
 } from 'lucide-react';
-import { showAndroidSoftKeyboard } from '../services/systemSettings';
+import { showAndroidSoftKeyboardForElement } from '../services/systemSettings';
 import { searchCitiesByName } from '../services/weatherService';
 import { ManualCityOption, WeatherState } from '../types/launcher';
 import { renderWeatherIcon } from './WeatherWidget';
@@ -281,14 +281,16 @@ export const WeatherDrawer: React.FC<WeatherDrawerProps> = ({
         if (inputEl) {
           inputEl.readOnly = false;
           inputEl.dataset.tvTextEditing = 'true';
-          inputEl.focus();
+          inputEl.focus({ preventScroll: true });
           try {
             const len = inputEl.value.length;
             inputEl.setSelectionRange(len, len);
           } catch {
             // Ignore selection errors
           }
-          void showAndroidSoftKeyboard();
+          requestAnimationFrame(() => {
+            void showAndroidSoftKeyboardForElement(inputEl);
+          });
         }
       }
       else if (currentFocus.index === 2) searchSubmitRef.current?.click();

@@ -8,7 +8,6 @@ import {
 } from 'react';
 import {
   Bluetooth,
-  ChevronRight,
   CloudSun,
   ExternalLink,
   Gamepad2,
@@ -421,7 +420,7 @@ export const QuickSettingsDrawer = forwardRef<
                   Quick Settings
                 </h2>
                 <p className="truncate text-[11px] text-white/60 sm:text-xs">
-                  Launcher controls · Arrows or tap
+                  Launcher controls · OK to select
                 </p>
               </div>
             </div>
@@ -451,7 +450,7 @@ export const QuickSettingsDrawer = forwardRef<
               activeKey={focusedIndex !== null ? rows[focusedIndex]?.id ?? null : null}
               getElementByKey={getRowEl}
               intensity={settings.ferrofluidIntensity}
-              borderRadius={14}
+              borderRadius={10}
               variant="row"
               liteMode={liteMode}
             />
@@ -460,11 +459,6 @@ export const QuickSettingsDrawer = forwardRef<
               const Icon = row.icon;
               const isFocused = focusedIndex === idx;
               const isWeatherRow = row.id === 'qs-weather';
-              const isExpanded =
-                (row.id === 'qs-inputs' && expandedPanel === 'inputs') ||
-                (row.id === 'qs-wifi' && expandedPanel === 'wifi') ||
-                (row.id === 'qs-bluetooth' && expandedPanel === 'bluetooth') ||
-                (row.id === 'qs-display' && expandedPanel === 'display');
 
               return (
                 <div key={row.id} className="relative z-10">
@@ -502,7 +496,7 @@ export const QuickSettingsDrawer = forwardRef<
                       </div>
                     </div>
 
-                    {isWeatherRow ? (
+                    {isWeatherRow && (
                       <span
                         aria-hidden="true"
                         className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
@@ -517,17 +511,6 @@ export const QuickSettingsDrawer = forwardRef<
                           }`}
                         />
                       </span>
-                    ) : (
-                      <ChevronRight
-                        size={16}
-                        className={`shrink-0 transition-transform ${
-                          isExpanded
-                            ? 'rotate-90 text-white'
-                            : isFocused
-                            ? 'translate-x-0.5 text-white'
-                            : 'text-white/45'
-                        }`}
-                      />
                     )}
                   </button>
 

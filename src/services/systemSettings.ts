@@ -43,7 +43,7 @@ interface TvSystemSettingsPlugin {
     openedSettings?: boolean;
     enabled: boolean;
   }>;
-  showSoftInput(): Promise<void>;
+  showSoftInput(options?: { xRatio?: number; yRatio?: number }): Promise<void>;
   startQrPasteSession(options: { fieldLabel?: string }): Promise<{
     url: string;
     token: string;
@@ -51,9 +51,26 @@ interface TvSystemSettingsPlugin {
     port: number;
   }>;
   stopQrPasteSession(): Promise<void>;
+  startQrPhotoUploadSession(): Promise<{
+    url: string;
+    token: string;
+    ip: string;
+    port: number;
+  }>;
+  stopQrPhotoUploadSession(): Promise<void>;
+  consumeQrUploadedFile(options: { filePath: string }): Promise<void>;
   addListener(
     eventName: 'qrPasteReceived',
     listenerFunc: (event: { token: string; url: string }) => void
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: 'qrPhotoUploaded',
+    listenerFunc: (event: {
+      token: string;
+      filePath: string;
+      fileName: string;
+      mimeType: string;
+    }) => void
   ): Promise<PluginListenerHandle>;
 }
 
@@ -271,12 +288,45 @@ export async function toggleNativeBluetooth(
   }
 }
 
-export async function showAndroidSoftKeyboard(): Promise<void> {
+export async function showAndroidSoftKeyboard(
+  xRatio?: number,
+  yRatio?: number
+): Promise<void> {
   if (!Capacitor.isNativePlatform()) return;
   try {
-    await TvSystemSettings.showSoftInput();
+    if (
+      typeof xRatio === 'number' &&
+      typeof yRatio === 'number' &&
+      Number.isFinite(xRatio) &&
+      Number.isFinite(yRatio)
+    ) {
+      window.dispatchEvent(new CustomEvent('tv-suppress-touch-remote-wake'));
+      await TvSystemSettings.showSoftInput({ xRatio, yRatio });
+    } else {
+      await TvSystemSettings.showSoftInput();
+    }
   } catch {
     // Ignore unsupported platform/IME errors
+  }
+}
+
+export async function showAndroidSoftKeyboardForElement(
+  el: HTMLElement | null
+): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  if (!el) {
+    await showAndroidSoftKeyboard();
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  const vw = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+  const vh = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+  if (rect.width > 0 && rect.height > 0) {
+    const xPx = Math.min(vw - 2, Math.max(2, rect.left + Math.min(rect.width * 0.5, rect.width - 8)));
+    const yPx = Math.min(vh - 2, Math.max(2, rect.top + rect.height * 0.5));
+    await showAndroidSoftKeyboard(xPx / vw, yPx / vh);
+  } else {
+    await showAndroidSoftKeyboard();
   }
 }
 
@@ -313,4 +363,53 @@ export async function addAndroidQrPasteListener(
     return () => {};
   }
 }
+
+export interface QrUploadedPhotoPayload {
+  token: string;
+  filePath: string;
+  fileName: string;
+  mimeType: string;
+}
+
+export async function startAndroidQrPhotoUploadSession(): Promise<QrPasteSessionInfo> {
+  if (!Capacitor.isNativePlatform()) {
+    throw new Error('Phone QR Photo Upload local Wi-Fi server runs in the Android TV app.');
+  }
+  return await TvSystemSettings.startQrPhotoUploadSession();
+}
+
+export async function stopAndroidQrPhotoUploadSession(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await TvSystemSettings.stopQrPhotoUploadSession();
+  } catch {
+    // Ignore teardown errors
+  }
+}
+
+export async function consumeAndroidQrUploadedFile(filePath: string): Promise<void> {
+  if (!Capacitor.isNativePlatform() || !filePath) return;
+  try {
+    await TvSystemSettings.consumeQrUploadedFile({ filePath });
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+export async function addAndroidQrPhotoUploadListener(
+  onReceive: (payload: QrUploadedPhotoPayload) => void
+): Promise<() => void> {
+  if (!Capacitor.isNativePlatform()) {
+    return () => {};
+  }
+  try {
+    const handle = await TvSystemSettings.addListener('qrPhotoUploaded', onReceive);
+    return () => {
+      void handle.remove();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
 

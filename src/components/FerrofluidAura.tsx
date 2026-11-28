@@ -163,13 +163,14 @@ export const FerrofluidAura: React.FC<FerrofluidAuraProps> = ({
   activeKey,
   getElementByKey,
   intensity,
-  borderRadius = 16,
+  borderRadius = 12,
   variant = 'tile',
   pulseActive = false,
   liteMode = false,
 }) => {
   const uid = useId().replace(/:/g, '');
   const [rect, setRect] = useState<RectBox | null>(null);
+  const [measuredRadius, setMeasuredRadius] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState<ContainerSize>({
     width: 0,
     height: 0,
@@ -228,6 +229,17 @@ export const FerrofluidAura: React.FC<FerrofluidAuraProps> = ({
 
       const cBox = container.getBoundingClientRect();
       const eBox = el.getBoundingClientRect();
+      const rawRadius = Number.parseFloat(
+        window.getComputedStyle(el).borderTopLeftRadius || '0'
+      );
+      const nextRadius =
+        Number.isFinite(rawRadius) && rawRadius > 0 ? rawRadius : null;
+      setMeasuredRadius((prev) =>
+        prev === nextRadius ||
+        (prev !== null && nextRadius !== null && Math.abs(prev - nextRadius) < 0.25)
+          ? prev
+          : nextRadius
+      );
 
       const nextW = Math.max(1, container.scrollWidth || cBox.width);
       const nextH = Math.max(1, container.scrollHeight || cBox.height);
@@ -292,12 +304,13 @@ export const FerrofluidAura: React.FC<FerrofluidAuraProps> = ({
   }
 
   // Hollow border-only perimeter offset outside the tile/row so interior never lightens
-  const pad = variant === 'row' ? 2 : 3.5;
+  const pad = variant === 'row' ? 2 : 3;
   const targetX = rect.x - pad;
   const targetY = rect.y - pad;
   const targetW = rect.width + pad * 2;
   const targetH = rect.height + pad * 2;
-  const targetR = borderRadius + pad;
+  const innerRadius = measuredRadius ?? borderRadius;
+  const targetR = Math.max(0, innerRadius + pad);
   const targetCx = targetX + targetW / 2;
   const targetCy = targetY + targetH / 2;
 

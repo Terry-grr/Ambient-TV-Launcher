@@ -33,6 +33,7 @@ import { getEffectiveWeatherTags } from '../services/wallpaperCatalogService';
 import { isSafeHttpUrl } from '../utils/urlValidation';
 import { QrCodeSvg } from './QrCodeSvg';
 import { QrPasteModal } from './QrPasteModal';
+import { QrPhotoUploadModal } from './QrPhotoUploadModal';
 
 interface AlbumPickerModalProps {
   curatedWallpapers: WallpaperItem[];
@@ -54,7 +55,7 @@ interface AlbumPickerModalProps {
   onRefreshCatalog: (category?: CuratedCategory) => Promise<void>;
   onRestoreCuratedWallpapers: () => void;
   onSelectWallpaper: (wallpaperId: string) => void;
-  onUploadFiles: (files: FileList) => Promise<void>;
+  onUploadFiles: (files: FileList | File[]) => Promise<void>;
   onDeleteLocalPhoto: (id: string) => Promise<void>;
   onHideCuratedWallpaper: (id: string) => void;
   onClearLocalAlbum: () => Promise<void>;
@@ -116,9 +117,12 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlPasteNotice, setUrlPasteNotice] = useState<string | null>(null);
   const [showUrlQrModal, setShowUrlQrModal] = useState(false);
+  const [showPhotoQrModal, setShowPhotoQrModal] = useState(false);
+  const [photoQrNotice, setPhotoQrNotice] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const customUrlAddBtnRef = useRef<HTMLButtonElement | null>(null);
   const customUrlQrBtnRef = useRef<HTMLButtonElement | null>(null);
+  const localPhotoQrBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const focusCardById = useCallback((cardId: string) => {
     requestAnimationFrame(() => {
@@ -189,6 +193,7 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
 
   useEffect(() => {
     const onSubBack = (e: Event) => {
+      if (showUrlQrModal || showPhotoQrModal) return;
       if (editingTagsId) {
         e.preventDefault();
         const targetId = editingTagsId;
@@ -217,7 +222,14 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
     };
     window.addEventListener('tv-modal-subback', onSubBack);
     return () => window.removeEventListener('tv-modal-subback', onSubBack);
-  }, [editingTagsId, openFilterMenu, actionCardId, focusCardById]);
+  }, [
+    showUrlQrModal,
+    showPhotoQrModal,
+    editingTagsId,
+    openFilterMenu,
+    actionCardId,
+    focusCardById,
+  ]);
 
   const visibleWallpapers = useMemo(() => {
     return allCombined.filter((item) => {
@@ -440,10 +452,10 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                   />
                   <span>
                     {refreshingCatalog
-                      ? 'Updating…'
+                      ? 'Pulling…'
                       : refreshCategory
-                      ? `Refresh ${CURATED_CATEGORY_LABELS[refreshCategory]}`
-                      : 'Refresh Catalog'}
+                      ? `Pull More ${CURATED_CATEGORY_LABELS[refreshCategory]} Images`
+                      : 'Pull More Images'}
                   </span>
                 </button>
               </div>
@@ -652,9 +664,18 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
 
               {/* Slideshow Auto-Advance */}
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/12 bg-white/[0.04] p-4">
-                <span className="text-xs font-medium text-white/90 sm:text-sm">
-                  Slideshow Auto-Advance
-                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-white/90 sm:text-sm">
+                    Slideshow Auto-Advance
+                  </div>
+                  <p className="mt-0.5 text-xs text-white/55">
+                    {slideshowIntervalSec < 0
+                      ? 'Indefinite · Only changes when you press Next/Previous or pick another image'
+                      : slideshowIntervalSec === 0
+                      ? 'Off · Auto-advance paused until a time is chosen'
+                      : `Advances automatically every ${slideshowIntervalSec}s`}
+                  </p>
+                </div>
                 <div className="flex flex-wrap gap-1.5">
                   {[
                     { sec: 0, label: 'Off' },
@@ -664,12 +685,13 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                     { sec: 120, label: '120s' },
                     { sec: 180, label: '180s' },
                     { sec: 240, label: '240s' },
+                    { sec: -1, label: 'Indefinite' },
                   ].map((opt) => (
                     <button
                       key={opt.sec}
                       type="button"
                       onClick={() => onChangeSlideshowInterval(opt.sec)}
-                      className={`min-h-[38px] rounded-xl px-3 text-xs font-medium transition-colors ${
+                      className={`min-h-[38px] whitespace-nowrap rounded-xl px-3 text-xs font-medium transition-colors ${
                         slideshowIntervalSec === opt.sec
                           ? 'bg-white font-semibold text-[#07080A]'
                           : 'border border-white/15 bg-white/5 text-white/75 hover:bg-white/12'
@@ -781,6 +803,20 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                       <span>Select Folder</span>
                     </button>
 
+                    <button
+                      ref={localPhotoQrBtnRef}
+                      type="button"
+                      disabled={uploading}
+                      onClick={() => {
+                        setPhotoQrNotice(null);
+                        setShowPhotoQrModal(true);
+                      }}
+                      className="inline-flex min-h-[42px] shrink-0 items-center gap-2 whitespace-nowrap rounded-xl border border-white/20 bg-white/8 px-4 text-xs font-medium text-white hover:bg-white/15 disabled:opacity-50"
+                    >
+                      <QrCode size={14} />
+                      <span>Phone QR</span>
+                    </button>
+
                     {localWallpapers.length > 0 && (
                       <button
                         type="button"
@@ -793,6 +829,10 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                     )}
                   </div>
                 </div>
+
+                {photoQrNotice && (
+                  <p className="mt-2.5 text-xs text-emerald-300">{photoQrNotice}</p>
+                )}
 
                 <input
                   ref={multiPhotoInputRef}
@@ -1196,6 +1236,28 @@ export const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({
                 !document.activeElement
               ) {
                 customUrlQrBtnRef.current?.focus({ preventScroll: true });
+              }
+            });
+          }}
+        />
+      )}
+
+      {showPhotoQrModal && (
+        <QrPhotoUploadModal
+          onUploadFiles={onUploadFiles}
+          onClose={(count) => {
+            setShowPhotoQrModal(false);
+            if (count > 0) {
+              setPhotoQrNotice(
+                `Added ${count} ${count === 1 ? 'photo' : 'photos'} from phone.`
+              );
+            }
+            requestAnimationFrame(() => {
+              if (
+                document.activeElement === document.body ||
+                !document.activeElement
+              ) {
+                localPhotoQrBtnRef.current?.focus({ preventScroll: true });
               }
             });
           }}

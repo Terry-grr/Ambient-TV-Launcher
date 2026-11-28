@@ -178,7 +178,7 @@ export interface LauncherSettings {
   clockFormat: ClockFormat;
   scrimOpacity: number; // 0.35 to 0.85
   ferrofluidIntensity: FerrofluidIntensity;
-  slideshowIntervalSec: number; // 0 = manual, 20, 45, 90, 120, 180, 240
+  slideshowIntervalSec: number; // -1 = indefinite (manual only), 0 = off, 20, 45, 90, 120, 180, 240
   slideshowPools: Record<SlideshowPoolKey, boolean>;
   syncBackgroundToWeather: boolean;
   wallpaperWeatherTags: Record<string, WeatherTag[]>;

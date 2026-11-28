@@ -53,7 +53,7 @@ import {
   openAndroidInputSettings,
   openAndroidSystemSettings,
   requestNativeBluetoothPermission,
-  showAndroidSoftKeyboard,
+  showAndroidSoftKeyboardForElement,
   switchNativeTvInput,
   toggleNativeBluetooth,
 } from './services/systemSettings';
@@ -191,16 +191,25 @@ function armTextInputBorderOnly(el: HTMLInputElement | HTMLTextAreaElement): voi
 }
 
 function activateTextInputEdit(el: HTMLInputElement | HTMLTextAreaElement): void {
+  el.dataset.tvActivating = 'true';
+  if (document.activeElement === el) {
+    el.blur();
+  }
   el.dataset.tvTextEditing = 'true';
   el.readOnly = false;
-  el.focus({ preventScroll: true });
-  try {
-    const len = el.value.length;
-    el.setSelectionRange(len, len);
-  } catch {
-    // Ignore input types that disallow setSelectionRange
-  }
-  void showAndroidSoftKeyboard();
+  requestAnimationFrame(() => {
+    el.readOnly = false;
+    el.dataset.tvTextEditing = 'true';
+    el.focus({ preventScroll: true });
+    try {
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    } catch {
+      // Ignore input types that disallow setSelectionRange
+    }
+    delete el.dataset.tvActivating;
+    void showAndroidSoftKeyboardForElement(el);
+  });
 }
 
 function moveDialogFocus(
@@ -836,14 +845,22 @@ export default function App() {
   }, [allWallpapers, activeSlideshowPool, activeWallpaperId]);
 
   // If weather sync is active and weather shifts or sync turns on, align current background if mismatched
+  // Skip automatic swaps when slideshow timing is set to Indefinite (-1) so only manual selection or Next/Prev buttons change it.
   useEffect(() => {
-    if (!settings.syncBackgroundToWeather || activeSlideshowPool.length === 0) return;
+    if (
+      !settings.syncBackgroundToWeather ||
+      settings.slideshowIntervalSec < 0 ||
+      activeSlideshowPool.length === 0
+    ) {
+      return;
+    }
     const stillMatches = activeSlideshowPool.some((w) => w.id === activeWallpaper.id);
     if (!stillMatches) {
       setActiveWallpaperId(activeSlideshowPool[0].id);
     }
   }, [
     settings.syncBackgroundToWeather,
+    settings.slideshowIntervalSec,
     activeWeatherTag,
     activeSlideshowPool,
     activeWallpaper.id,
@@ -1223,10 +1240,8 @@ export default function App() {
 
     const onFocusOut = (e: FocusEvent) => {
       if (isDialogTextInput(e.target)) {
-        const dialog = getActiveDialog();
-        if (dialog && dialog.contains(e.target)) {
-          armTextInputBorderOnly(e.target);
-        }
+        if (e.target.dataset.tvActivating === 'true') return;
+        armTextInputBorderOnly(e.target);
       }
     };
 
@@ -1843,6 +1858,10 @@ export default function App() {
       suppressOkLaunchUntilRef.current = performance.now() + 250;
     };
 
+    const onSuppressTouchRemoteWake = () => {
+      suppressTouchWakeUntilRef.current = performance.now() + 900;
+    };
+
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keypress', onKeyPress, true);
     window.addEventListener('keyup', onKeyUp, true);
@@ -1851,6 +1870,7 @@ export default function App() {
     window.addEventListener('tv-hardware-back', onHardwareBack);
     window.addEventListener('tv-hardware-ok-longpress', onHardwareOkLongPress);
     window.addEventListener('tv-hardware-ok-longpress-end', onHardwareOkLongPressEnd);
+    window.addEventListener('tv-suppress-touch-remote-wake', onSuppressTouchRemoteWake);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keypress', onKeyPress, true);
@@ -1860,14 +1880,18 @@ export default function App() {
       window.removeEventListener('tv-hardware-back', onHardwareBack);
       window.removeEventListener('tv-hardware-ok-longpress', onHardwareOkLongPress);
       window.removeEventListener('tv-hardware-ok-longpress-end', onHardwareOkLongPressEnd);
+      window.removeEventListener('tv-suppress-touch-remote-wake', onSuppressTouchRemoteWake);
       if (enterHoldTimerRef.current) window.clearTimeout(enterHoldTimerRef.current);
     };
   }, []);
 
   // Touch swipe navigation between Default / Ambient / Quick Settings / Apps Drawer
+  const suppressTouchWakeUntilRef = useRef<number>(0);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const onTouchStart = (e: React.TouchEvent) => {
-    setTouchRemoteSuppressed(false);
+    if (performance.now() >= suppressTouchWakeUntilRef.current) {
+      setTouchRemoteSuppressed(false);
+    }
     if (modal || e.touches.length !== 1) return;
     touchStartRef.current = {
       x: e.touches[0].clientX,
@@ -2007,7 +2031,7 @@ export default function App() {
                 activeKey={activeHomeKey}
                 getElementByKey={getDockTileEl}
                 intensity={settings.ferrofluidIntensity}
-                borderRadius={16}
+                borderRadius={12}
                 variant="tile"
                 liteMode={isNativeAndroid}
               />
